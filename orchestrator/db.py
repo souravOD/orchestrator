@@ -87,6 +87,8 @@ def create_orchestration_run(
     flow_type: str = "batch",
     layers: Optional[List[str]] = None,
     config: Optional[Dict[str, Any]] = None,
+    source_name: Optional[str] = None,
+    vendor_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Insert a new orchestration_run and return the record."""
     payload = {
@@ -101,9 +103,13 @@ def create_orchestration_run(
         "started_at": _utcnow(),
         "config": config or {},
     }
+    if source_name:
+        payload["source_name"] = source_name
+    if vendor_id:
+        payload["vendor_id"] = vendor_id
     result = _orch_table("orchestration_runs").insert(payload).execute()
     row = (result.data or [None])[0]
-    logger.info("Created orchestration_run %s (flow=%s)", row["id"], flow_name)
+    logger.info("Created orchestration_run %s (flow=%s, source=%s)", row["id"], flow_name, source_name)
     return row
 
 
@@ -483,16 +489,21 @@ def update_pipeline_definition(
 # Concurrent Run Prevention
 # ══════════════════════════════════════════════════════
 
-def has_running_flow(flow_name: str) -> bool:
-    """Check if a flow already has a run with status='running'."""
-    result = (
+def has_running_flow(flow_name: str, source_name: Optional[str] = None) -> bool:
+    """Check if a flow already has a run with status='running'.
+
+    When *source_name* is provided, the check is scoped to that source,
+    allowing different sources to run the same flow in parallel.
+    """
+    query = (
         _orch_table("orchestration_runs")
         .select("id")
         .eq("flow_name", flow_name)
         .eq("status", "running")
-        .limit(1)
-        .execute()
     )
+    if source_name:
+        query = query.eq("source_name", source_name)
+    result = query.limit(1).execute()
     return len(result.data or []) > 0
 
 

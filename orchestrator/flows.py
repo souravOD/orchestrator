@@ -49,10 +49,15 @@ class ConcurrentRunError(RuntimeError):
         super().__init__(f"Flow '{flow_name}' is already running. Concurrent runs are not allowed.")
 
 
-def _guard_concurrent(flow_name: str) -> None:
-    """Raise ConcurrentRunError if the flow already has a running run."""
-    if db.has_running_flow(flow_name):
-        raise ConcurrentRunError(flow_name)
+def _guard_concurrent(flow_name: str, source_name: Optional[str] = None) -> None:
+    """Raise ConcurrentRunError if the flow already has a running run.
+
+    When *source_name* is provided, the guard is per-source so that
+    different sources can run the same flow in parallel.
+    """
+    if db.has_running_flow(flow_name, source_name=source_name):
+        label = f"{flow_name}/{source_name}" if source_name else flow_name
+        raise ConcurrentRunError(label)
 
 
 def _send_success_notification(flow_name: str, orch_run_id: str, duration: float, **extra) -> None:
@@ -84,10 +89,14 @@ def full_ingestion_flow(
     source_name: str,
     raw_input: Optional[List[Dict[str, Any]]] = None,
     input_path: Optional[str] = None,
+    vendor_id: Optional[str] = None,
+    storage_bucket: Optional[str] = None,
+    storage_path: Optional[str] = None,
     trigger_type: str = "manual",
     triggered_by: Optional[str] = None,
     config: Optional[Dict[str, Any]] = None,
     resume_from_run_id: Optional[str] = None,
+    orch_run_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Full medallion pipeline execution.
@@ -95,12 +104,20 @@ def full_ingestion_flow(
     Provide data as either ``raw_input`` (list of dicts) or
     ``input_path`` (path to a CSV/JSON/NDJSON file that the
     PreBronze pipeline will read).
+
+    If ``orch_run_id`` is supplied the flow reuses that pre-created
+    orchestration_runs row instead of inserting a new one.  The API
+    layer uses this so it can return the run_id immediately.
     """
     cfg = config or {}
     start = time.time()
 
-    # Concurrency guard
-    _guard_concurrent("full_ingestion")
+    # Per-source concurrency guard
+    _guard_concurrent("full_ingestion", source_name=source_name)
+
+    # If storage params provided, build a storage:// URI for _load_input
+    if raw_input is None and storage_bucket and storage_path:
+        input_path = f"storage://{storage_bucket}/{storage_path}"
 
     # Input validation
     from .models import IngestionInput
@@ -118,16 +135,21 @@ def full_ingestion_flow(
     if raw_input is None:
         raw_input = []
 
-    # Create top-level orchestration run
-    orch_run = db.create_orchestration_run(
-        flow_name="full_ingestion",
-        trigger_type=trigger_type,
-        triggered_by=triggered_by,
-        layers=["prebronze_to_bronze", "bronze_to_silver", "silver_to_gold", "gold_to_neo4j"],
-        config=cfg,
-    )
-    orch_run_id = orch_run["id"]
-    logger.info("🔄 Orchestration run %s — full_ingestion started", orch_run_id)
+    # Create or reuse orchestration run
+    if orch_run_id:
+        logger.info("🔄 Orchestration run %s — full_ingestion started (pre-created)", orch_run_id)
+    else:
+        orch_run = db.create_orchestration_run(
+            flow_name="full_ingestion",
+            trigger_type=trigger_type,
+            triggered_by=triggered_by,
+            layers=["prebronze_to_bronze", "bronze_to_silver", "silver_to_gold", "gold_to_neo4j"],
+            config=cfg,
+            source_name=source_name,
+            vendor_id=vendor_id,
+        )
+        orch_run_id = orch_run["id"]
+        logger.info("🔄 Orchestration run %s — full_ingestion started", orch_run_id)
 
     results: Dict[str, Any] = {}
     total_written = 0
@@ -249,21 +271,31 @@ def bronze_to_gold_flow(
     trigger_type: str = "manual",
     triggered_by: Optional[str] = None,
     config: Optional[Dict[str, Any]] = None,
+    source_name: Optional[str] = None,
+    vendor_id: Optional[str] = None,
+    orch_run_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Run Bronze→Silver and Silver→Gold in sequence."""
+    """Run Bronze→Silver and Silver→Gold in sequence.
+
+    If ``orch_run_id`` is supplied the flow reuses that pre-created
+    orchestration_runs row.
+    """
     cfg = config or {}
     start = time.time()
 
-    _guard_concurrent("bronze_to_gold")
+    _guard_concurrent("bronze_to_gold", source_name=source_name)
 
-    orch_run = db.create_orchestration_run(
-        flow_name="bronze_to_gold",
-        trigger_type=trigger_type,
-        triggered_by=triggered_by,
-        layers=["bronze_to_silver", "silver_to_gold"],
-        config=cfg,
-    )
-    orch_run_id = orch_run["id"]
+    if not orch_run_id:
+        orch_run = db.create_orchestration_run(
+            flow_name="bronze_to_gold",
+            trigger_type=trigger_type,
+            triggered_by=triggered_by,
+            layers=["bronze_to_silver", "silver_to_gold"],
+            config=cfg,
+            source_name=source_name,
+            vendor_id=vendor_id,
+        )
+        orch_run_id = orch_run["id"]
     results: Dict[str, Any] = {}
 
     try:
@@ -450,7 +482,21 @@ def realtime_event_flow(
 # ══════════════════════════════════════════════════════
 
 def _load_input(path: str) -> List[Dict[str, Any]]:
-    """Load data from a file (CSV, JSON, or NDJSON)."""
+    """Load data from a file (CSV, JSON, NDJSON) or Supabase Storage URI."""
+    # Handle Supabase Storage URIs (storage://bucket/path)
+    if path.startswith("storage://"):
+        parts = path.replace("storage://", "").split("/", 1)
+        bucket, file_path = parts[0], parts[1]
+        try:
+            _ensure_pipeline_on_path("prebronze-to-bronze")
+            from prebronze.orchestrator import load_input_from_storage
+            return load_input_from_storage(bucket, file_path)
+        except ImportError:
+            raise ImportError(
+                "PreBronze pipeline's load_input_from_storage() is not available. "
+                "Install the prebronze-to-bronze package or contact the PreBronze team."
+            )
+
     file_path = Path(path)
     if not file_path.exists():
         raise FileNotFoundError(f"Input file not found: {path}")

@@ -128,16 +128,12 @@ async def trigger_flow(request: TriggerRequest):
     """
     Manually trigger an orchestration flow via API.
 
-    Example request body::
-
-        {
-            "flow_name": "full_ingestion",
-            "source_name": "walmart",
-            "input_path": "/data/walmart_products.csv",
-            "batch_size": 500
-        }
+    Returns immediately with ``{"status": "accepted", "run_id": "..."}``
+    while the flow runs in the background.  Poll ``GET /api/runs/{id}``
+    for progress.
     """
     from .flows import FLOW_REGISTRY
+    from . import db
 
     flow_fn = FLOW_REGISTRY.get(request.flow_name)
     if not flow_fn:
@@ -153,24 +149,63 @@ async def trigger_flow(request: TriggerRequest):
         "dry_run": request.dry_run,
     }
 
+    source_name = request.source_name or "api"
+
     try:
+        # Determine layers based on flow
+        if request.flow_name == "full_ingestion":
+            layers = ["prebronze_to_bronze", "bronze_to_silver", "silver_to_gold", "gold_to_neo4j"]
+        elif request.flow_name == "bronze_to_gold":
+            layers = ["bronze_to_silver", "silver_to_gold"]
+        else:
+            layers = request.layers or ["bronze_to_silver"]
+
+        # ── Create the orchestration_runs row NOW so we can return run_id ──
+        orch_run = db.create_orchestration_run(
+            flow_name=request.flow_name,
+            trigger_type="api",
+            triggered_by="api:/api/trigger",
+            layers=layers,
+            config=config,
+            source_name=source_name,
+            vendor_id=request.vendor_id,
+        )
+        orch_run_id = orch_run["id"]
+
         # Build kwargs depending on flow type
         kwargs: Dict[str, Any] = {
             "trigger_type": "api",
             "triggered_by": "api:/api/trigger",
             "config": config,
+            "vendor_id": request.vendor_id,
+            "orch_run_id": orch_run_id,
         }
 
         if request.flow_name == "full_ingestion":
-            kwargs["source_name"] = request.source_name or "api"
-            kwargs["input_path"] = request.input_path
+            kwargs["source_name"] = source_name
+            if request.storage_bucket and request.storage_path:
+                kwargs["storage_bucket"] = request.storage_bucket
+                kwargs["storage_path"] = request.storage_path
+            else:
+                kwargs["input_path"] = request.input_path
 
         elif request.flow_name == "single_layer":
             kwargs["layer"] = request.layers[0] if request.layers else "bronze_to_silver"
-            kwargs["source_name"] = request.source_name
+            kwargs["source_name"] = source_name
 
-        result = flow_fn(**kwargs)
-        return {"status": "completed", "result": _safe_serialise(result)}
+        elif request.flow_name == "bronze_to_gold":
+            kwargs["source_name"] = source_name
+
+        # Dispatch to background thread — API returns immediately.
+        import asyncio
+        loop = asyncio.get_event_loop()
+        loop.run_in_executor(None, lambda: flow_fn(**kwargs))
+
+        return {
+            "status": "accepted",
+            "run_id": str(orch_run_id),
+            "flow_name": request.flow_name,
+        }
 
     except Exception as exc:
         logger.error("API trigger failed: %s", exc)

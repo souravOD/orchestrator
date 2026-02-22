@@ -220,6 +220,9 @@ class TriggerRequest(BaseModel):
     flow_name: str = "full_ingestion"
     source_name: Optional[str] = None
     input_path: Optional[str] = None
+    storage_bucket: Optional[str] = None
+    storage_path: Optional[str] = None
+    vendor_id: Optional[str] = None
     layers: List[str] = Field(
         default=["prebronze_to_bronze", "bronze_to_silver", "silver_to_gold"]
     )

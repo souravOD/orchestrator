@@ -155,7 +155,7 @@ export default function RunDetailPage() {
                 </div>
                 <div className="flex items-center justify-between">
                     <div className="flex items-center gap-8">
-                        <h2>{run.flow_name}</h2>
+                        <h2>{run.flow_name}{run.source_name ? ` — ${run.source_name}` : ''}</h2>
                         <StatusBadge status={run.status} />
                     </div>
 

@@ -68,6 +68,10 @@ CREATE TABLE orchestration.orchestration_runs (
     trigger_type            varchar(30)  NOT NULL,
     triggered_by            varchar(255),
 
+    -- Source / tenant isolation
+    source_name             varchar(100),
+    vendor_id               uuid,
+
     -- Which layers to run (ordered)
     layers                  text[]  DEFAULT ARRAY['prebronze_to_bronze',
                                                    'bronze_to_silver',
@@ -79,6 +83,10 @@ CREATE TABLE orchestration.orchestration_runs (
     total_records_written   int         DEFAULT 0,
     total_dq_issues         int         DEFAULT 0,
     total_errors            int         DEFAULT 0,
+
+    -- Progress tracking (B2B frontend)
+    progress_pct            int         NOT NULL DEFAULT 0,
+    totals                  jsonb       DEFAULT '{}'::jsonb,
 
     -- Timing
     started_at              timestamptz,
@@ -108,6 +116,10 @@ CREATE INDEX idx_orch_runs_status
     ON orchestration.orchestration_runs (status, created_at DESC);
 CREATE INDEX idx_orch_runs_flow
     ON orchestration.orchestration_runs (flow_name, created_at DESC);
+CREATE INDEX idx_orch_runs_source
+    ON orchestration.orchestration_runs (flow_name, source_name, status);
+CREATE INDEX idx_orch_runs_vendor
+    ON orchestration.orchestration_runs (vendor_id, created_at DESC);
 
 COMMENT ON TABLE orchestration.orchestration_runs
     IS 'Top-level orchestration flow execution. Groups one or more pipeline_runs.';

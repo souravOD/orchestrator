@@ -167,6 +167,7 @@ export default function OverviewPage() {
                 <thead>
                   <tr>
                     <th>Flow</th>
+                    <th>Source</th>
                     <th>Status</th>
                     <th>Duration</th>
                     <th>Started</th>
@@ -179,6 +180,9 @@ export default function OverviewPage() {
                         <Link href={`/runs/${run.id}`} className="fw-600">
                           {run.flow_name}
                         </Link>
+                      </td>
+                      <td className="text-muted text-sm">
+                        {run.source_name || '—'}
                       </td>
                       <td>
                         <StatusBadge status={run.status} />

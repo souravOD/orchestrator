@@ -46,6 +46,8 @@ export interface OrchestrationRun {
     status: string;
     trigger_type: string;
     triggered_by: string | null;
+    source_name: string | null;
+    vendor_id: string | null;
     layers: string[];
     current_layer: string | null;
     total_records_processed: number;
