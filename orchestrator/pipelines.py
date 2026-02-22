@@ -14,12 +14,13 @@ pipeline.  Each wrapper:
 
 from __future__ import annotations
 
+import concurrent.futures
 import logging
 import sys
 import time
 import traceback
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from prefect import task
 
@@ -66,6 +67,90 @@ def _calculate_duration(start: float) -> float:
     return round(time.time() - start, 2)
 
 
+class PipelineTimeoutError(Exception):
+    """Raised when a pipeline exceeds its configured timeout."""
+    def __init__(self, pipeline_name: str, timeout: int):
+        self.pipeline_name = pipeline_name
+        self.timeout = timeout
+        super().__init__(f"Pipeline '{pipeline_name}' timed out after {timeout}s")
+
+
+class FlowCancelledError(Exception):
+    """Raised when a flow has been cancelled via the API."""
+    def __init__(self, orchestration_run_id: str):
+        self.orchestration_run_id = orchestration_run_id
+        super().__init__(f"Flow {orchestration_run_id} was cancelled")
+
+
+def _check_cancellation(orchestration_run_id: str) -> None:
+    """Check if the parent orchestration run has been cancelled."""
+    run = db.get_orchestration_run(orchestration_run_id)
+    if run and run.get("status") == "cancelled":
+        raise FlowCancelledError(orchestration_run_id)
+
+
+def _run_with_timeout(
+    fn: Callable[..., Any],
+    args: tuple = (),
+    kwargs: dict | None = None,
+    timeout: int | None = None,
+    pipeline_name: str = "unknown",
+) -> Any:
+    """
+    Execute ``fn(*args, **kwargs)`` with an optional timeout.
+
+    Uses a thread-pool so the calling Prefect task isn't blocked.
+    If *timeout* is ``None``, runs without any limit.
+    """
+    kwargs = kwargs or {}
+    if timeout is None:
+        return fn(*args, **kwargs)
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(fn, *args, **kwargs)
+        try:
+            return future.result(timeout=timeout)
+        except FuturesTimeout:
+            raise PipelineTimeoutError(pipeline_name, timeout)
+
+
+def _store_metrics(pipeline_run_id: str, result: Dict[str, Any]) -> None:
+    """
+    Persist tool_metrics and llm_usage from a pipeline result dict.
+
+    Silently skips if the keys are missing (pipeline hasn't added them yet).
+    """
+    tool_metrics = result.get("tool_metrics", [])
+    if tool_metrics:
+        try:
+            db.create_tool_metrics(pipeline_run_id, tool_metrics)
+        except Exception as exc:
+            logger.warning("Failed to store tool metrics: %s", exc)
+
+    llm_usage = result.get("llm_usage")
+    if llm_usage:
+        try:
+            db.create_llm_usage(pipeline_run_id, llm_usage)
+        except Exception as exc:
+            logger.warning("Failed to store LLM usage: %s", exc)
+
+
+def _validate_contract(result: Dict[str, Any], contract_cls: type, pipeline_name: str) -> None:
+    """
+    Validate a pipeline result against its Pydantic contract (lenient mode).
+
+    Logs warnings but does NOT fail the pipeline run.
+    """
+    try:
+        contract_cls(**result)
+        logger.debug("Contract validated for %s", pipeline_name)
+    except Exception as exc:
+        logger.warning(
+            "⚠️ Contract validation warning for %s: %s (lenient — not failing)",
+            pipeline_name, exc,
+        )
+
+
 # ══════════════════════════════════════════════════════
 # Task 1: PreBronze → Bronze
 # ══════════════════════════════════════════════════════
@@ -106,6 +191,9 @@ def run_prebronze_to_bronze(
     cfg = config or {}
     start = time.time()
 
+    # Cancellation check before starting
+    _check_cancellation(orchestration_run_id)
+
     # 1. Create pipeline run record
     pipeline_run = db.create_pipeline_run(
         pipeline_name="prebronze_to_bronze",
@@ -133,9 +221,12 @@ def run_prebronze_to_bronze(
             **cfg,
         }
 
-        # 4. Run pipeline
-        logger.info("🚀 Starting PreBronze→Bronze (source=%s, records=%d)", source_name, len(raw_input))
-        final_state = run_sequential(state)
+        # 4. Run pipeline with timeout
+        timeout = db.get_pipeline_timeout("prebronze_to_bronze")
+        logger.info("🚀 Starting PreBronze→Bronze (source=%s, records=%d, timeout=%s)", source_name, len(raw_input), timeout)
+        final_state = _run_with_timeout(
+            run_sequential, args=(state,), timeout=timeout, pipeline_name="prebronze_to_bronze",
+        )
 
         # 5. Extract metrics
         records_written = final_state.get("records_loaded", 0)
@@ -154,9 +245,27 @@ def run_prebronze_to_bronze(
             completed_at=db._utcnow(),
             duration_seconds=_calculate_duration(start),
         )
+
+        # 7. Persist tool metrics + LLM usage
+        _store_metrics(run_id, final_state)
+
+        # 8. Contract validation (lenient)
+        from .contracts import PreBronzeResult
+        _validate_contract(final_state, PreBronzeResult, "prebronze_to_bronze")
+
         logger.info("✅ PreBronze→Bronze completed. Written=%d, Failed=%d", records_written, records_failed)
         return final_state
 
+    except PipelineTimeoutError:
+        db.update_pipeline_run(
+            run_id,
+            status="timed_out",
+            completed_at=db._utcnow(),
+            duration_seconds=_calculate_duration(start),
+            error_message=f"Timed out after {db.get_pipeline_timeout('prebronze_to_bronze')}s",
+        )
+        logger.error("⏰ PreBronze→Bronze TIMED OUT")
+        raise
     except Exception as exc:
         db.update_pipeline_run(
             run_id,
@@ -195,6 +304,8 @@ def run_bronze_to_silver(
     cfg = config or {}
     start = time.time()
 
+    _check_cancellation(orchestration_run_id)
+
     pipeline_run = db.create_pipeline_run(
         pipeline_name="bronze_to_silver",
         orchestration_run_id=orchestration_run_id,
@@ -211,8 +322,11 @@ def run_bronze_to_silver(
         _ensure_pipeline_on_path("bronze-to-silver")
         from bronze_to_silver.auto_orchestrator import transform_all_tables  # type: ignore
 
-        logger.info("🚀 Starting Bronze→Silver (auto-discovery mode)")
-        result = transform_all_tables()
+        timeout = db.get_pipeline_timeout("bronze_to_silver")
+        logger.info("🚀 Starting Bronze→Silver (auto-discovery mode, timeout=%s)", timeout)
+        result = _run_with_timeout(
+            transform_all_tables, timeout=timeout, pipeline_name="bronze_to_silver",
+        )
 
         total_processed = result.get("total_processed", 0)
         total_written = result.get("total_written", 0)
@@ -230,9 +344,26 @@ def run_bronze_to_silver(
             completed_at=db._utcnow(),
             duration_seconds=_calculate_duration(start),
         )
+
+        _store_metrics(run_id, result)
+
+        # Contract validation (lenient)
+        from .contracts import TransformResult
+        _validate_contract(result, TransformResult, "bronze_to_silver")
+
         logger.info("✅ Bronze→Silver completed. Written=%d, DQ=%d", total_written, total_dq)
         return result
 
+    except PipelineTimeoutError:
+        db.update_pipeline_run(
+            run_id,
+            status="timed_out",
+            completed_at=db._utcnow(),
+            duration_seconds=_calculate_duration(start),
+            error_message=f"Timed out after {db.get_pipeline_timeout('bronze_to_silver')}s",
+        )
+        logger.error("⏰ Bronze→Silver TIMED OUT")
+        raise
     except Exception as exc:
         db.update_pipeline_run(
             run_id,
@@ -271,6 +402,8 @@ def run_silver_to_gold(
     cfg = config or {}
     start = time.time()
 
+    _check_cancellation(orchestration_run_id)
+
     pipeline_run = db.create_pipeline_run(
         pipeline_name="silver_to_gold",
         orchestration_run_id=orchestration_run_id,
@@ -287,8 +420,11 @@ def run_silver_to_gold(
         _ensure_pipeline_on_path("silver-to-gold")
         from silver_to_gold.auto_orchestrator import transform_all_tables  # type: ignore
 
-        logger.info("🚀 Starting Silver→Gold (auto-discovery mode)")
-        result = transform_all_tables()
+        timeout = db.get_pipeline_timeout("silver_to_gold")
+        logger.info("🚀 Starting Silver→Gold (auto-discovery mode, timeout=%s)", timeout)
+        result = _run_with_timeout(
+            transform_all_tables, timeout=timeout, pipeline_name="silver_to_gold",
+        )
 
         total_processed = result.get("total_processed", 0)
         total_written = result.get("total_written", 0)
@@ -304,9 +440,26 @@ def run_silver_to_gold(
             completed_at=db._utcnow(),
             duration_seconds=_calculate_duration(start),
         )
+
+        _store_metrics(run_id, result)
+
+        # Contract validation (lenient)
+        from .contracts import TransformResult
+        _validate_contract(result, TransformResult, "silver_to_gold")
+
         logger.info("✅ Silver→Gold completed. Written=%d, Failed=%d", total_written, total_failed)
         return result
 
+    except PipelineTimeoutError:
+        db.update_pipeline_run(
+            run_id,
+            status="timed_out",
+            completed_at=db._utcnow(),
+            duration_seconds=_calculate_duration(start),
+            error_message=f"Timed out after {db.get_pipeline_timeout('silver_to_gold')}s",
+        )
+        logger.error("⏰ Silver→Gold TIMED OUT")
+        raise
     except Exception as exc:
         db.update_pipeline_run(
             run_id,
@@ -339,6 +492,8 @@ def run_gold_to_neo4j_batch(
     """
     cfg = config or {}
     start = time.time()
+
+    _check_cancellation(orchestration_run_id)
 
     pipeline_run = db.create_pipeline_run(
         pipeline_name="gold_to_neo4j",
@@ -408,6 +563,8 @@ def run_gold_to_neo4j_batch(
                 duration_seconds=_calculate_duration(start),
             )
             logger.info("✅ Gold→Neo4j batch sync completed (layer=%s)", layer)
+
+        _store_metrics(run_id, result_dict)
 
         return result_dict
 

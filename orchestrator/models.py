@@ -13,7 +13,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 # ── Enums ─────────────────────────────────────────────
@@ -76,6 +76,7 @@ class PipelineDefinition(BaseModel):
     repo_url: Optional[str] = None
     default_config: Dict[str, Any] = Field(default_factory=dict)
     is_active: bool = True
+    timeout_seconds: Optional[int] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -226,6 +227,25 @@ class TriggerRequest(BaseModel):
     incremental: bool = True
     dry_run: bool = False
 
+
+class IngestionInput(BaseModel):
+    """Validated input for full_ingestion and single_layer flows."""
+    source_name: str = Field(..., min_length=1, description="Vendor/data source name")
+    raw_input: Optional[List[Dict[str, Any]]] = None
+    input_path: Optional[str] = None
+
+    @model_validator(mode="after")
+    def at_least_one_input(self):
+        if not self.raw_input and not self.input_path:
+            raise ValueError("Either 'raw_input' or 'input_path' must be provided")
+        return self
+
+    @field_validator("raw_input")
+    @classmethod
+    def non_empty_if_provided(cls, v):
+        if v is not None and len(v) == 0:
+            raise ValueError("raw_input cannot be an empty list")
+        return v
 
 class RunSummaryResponse(BaseModel):
     """Lightweight response for listing runs."""

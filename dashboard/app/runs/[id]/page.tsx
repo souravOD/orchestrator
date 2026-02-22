@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { api, OrchestrationRun, PipelineRun } from "@/lib/api";
 import StatusBadge from "@/components/StatusBadge";
@@ -31,24 +31,54 @@ function formatTime(ts: string | null): string {
 
 export default function RunDetailPage() {
     const { id } = useParams<{ id: string }>();
+    const router = useRouter();
     const [run, setRun] = useState<OrchestrationRun | null>(null);
     const [pipelineRuns, setPipelineRuns] = useState<PipelineRun[]>([]);
     const [loading, setLoading] = useState(true);
+    const [actionLoading, setActionLoading] = useState<string | null>(null);
+    const [confirmAction, setConfirmAction] = useState<"cancel" | "retry" | null>(null);
+
+    async function load() {
+        try {
+            const data = await api.getRunSteps(id);
+            setRun(data.orchestration_run);
+            setPipelineRuns(data.pipeline_runs);
+        } catch (err) {
+            console.error("Failed to load run:", err);
+        } finally {
+            setLoading(false);
+        }
+    }
 
     useEffect(() => {
-        async function load() {
-            try {
-                const data = await api.getRunSteps(id);
-                setRun(data.orchestration_run);
-                setPipelineRuns(data.pipeline_runs);
-            } catch (err) {
-                console.error("Failed to load run:", err);
-            } finally {
-                setLoading(false);
-            }
-        }
         load();
     }, [id]);
+
+    async function handleCancel() {
+        setConfirmAction(null);
+        setActionLoading("cancel");
+        try {
+            await api.cancelRun(id);
+            await load();
+        } catch (err) {
+            console.error("Cancel failed:", err);
+        } finally {
+            setActionLoading(null);
+        }
+    }
+
+    async function handleRetry() {
+        setConfirmAction(null);
+        setActionLoading("retry");
+        try {
+            await api.retryRun(id);
+            router.push("/runs");
+        } catch (err) {
+            console.error("Retry failed:", err);
+        } finally {
+            setActionLoading(null);
+        }
+    }
 
     if (loading) {
         return (
@@ -81,17 +111,75 @@ export default function RunDetailPage() {
     const progressColor =
         run.status === "failed" ? "red" :
             run.status === "completed" ? "green" :
-                "blue";
+                run.status === "cancelled" ? "amber" :
+                    "blue";
+
+    const canCancel = ["running", "pending", "queued"].includes(run.status);
+    const canRetry = run.status === "failed";
 
     return (
         <div>
+            {/* Confirm Dialog */}
+            {confirmAction && (
+                <div className="confirm-overlay" onClick={() => setConfirmAction(null)}>
+                    <div className="confirm-dialog" onClick={(e) => e.stopPropagation()}>
+                        <h3>
+                            {confirmAction === "cancel" ? "Cancel Run?" : "Retry Run?"}
+                        </h3>
+                        <p>
+                            {confirmAction === "cancel"
+                                ? "This will send a cancellation signal. The run will stop at the next checkpoint."
+                                : "This will create a new run that resumes from the last completed layer."}
+                        </p>
+                        <div className="confirm-actions">
+                            <button
+                                className="btn btn-ghost"
+                                onClick={() => setConfirmAction(null)}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                className={`btn ${confirmAction === "cancel" ? "btn-red" : "btn-blue"}`}
+                                onClick={confirmAction === "cancel" ? handleCancel : handleRetry}
+                            >
+                                {confirmAction === "cancel" ? "Confirm Cancel" : "Confirm Retry"}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             <div className="page-header">
                 <div className="text-sm text-muted mb-2">
                     <Link href="/runs">← Runs</Link> / {id.slice(0, 8)}
                 </div>
-                <div className="flex items-center gap-8">
-                    <h2>{run.flow_name}</h2>
-                    <StatusBadge status={run.status} />
+                <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-8">
+                        <h2>{run.flow_name}</h2>
+                        <StatusBadge status={run.status} />
+                    </div>
+
+                    {/* Action Buttons */}
+                    <div className="flex gap-8">
+                        {canCancel && (
+                            <button
+                                className="btn btn-red"
+                                disabled={actionLoading === "cancel"}
+                                onClick={() => setConfirmAction("cancel")}
+                            >
+                                {actionLoading === "cancel" ? "Cancelling…" : "⏹ Cancel"}
+                            </button>
+                        )}
+                        {canRetry && (
+                            <button
+                                className="btn btn-blue"
+                                disabled={actionLoading === "retry"}
+                                onClick={() => setConfirmAction("retry")}
+                            >
+                                {actionLoading === "retry" ? "Retrying…" : "🔄 Retry"}
+                            </button>
+                        )}
+                    </div>
                 </div>
                 <p>
                     Triggered by {run.trigger_type}

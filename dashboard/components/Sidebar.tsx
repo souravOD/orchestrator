@@ -9,6 +9,7 @@ const NAV_ITEMS = [
     { href: "/pipelines", label: "Pipelines", icon: "🔗" },
     { href: "/neo4j", label: "Neo4j Sync", icon: "🕸️" },
     { href: "/alerts", label: "Alerts", icon: "🔔" },
+    { href: "/dead-letters", label: "Dead Letters", icon: "📬" },
 ];
 
 export default function Sidebar() {

@@ -24,6 +24,7 @@ CREATE TABLE orchestration.pipeline_definitions (
     repo_url        varchar(500),
     default_config  jsonb        DEFAULT '{}',
     is_active       boolean      DEFAULT true,
+    timeout_seconds int          DEFAULT NULL,
     created_at      timestamptz  DEFAULT now(),
     updated_at      timestamptz  DEFAULT now(),
 
@@ -34,6 +35,9 @@ CREATE TABLE orchestration.pipeline_definitions (
         layer_to IN ('bronze', 'silver', 'gold', 'neo4j')
     )
 );
+
+COMMENT ON COLUMN orchestration.pipeline_definitions.timeout_seconds
+    IS 'Optional per-pipeline timeout in seconds. NULL means no timeout.';
 
 COMMENT ON TABLE orchestration.pipeline_definitions
     IS 'Registry of all known data pipelines in the medallion architecture';
@@ -355,4 +359,82 @@ VALUES
     ('daily_reconciliation', '30 3 * * *', 'neo4j_reconciliation',
      '{}')
 ON CONFLICT (schedule_name) DO NOTHING;
+
+
+-- ─────────────────────────────────────────────
+-- 9. PIPELINE TOOL METRICS
+-- Per-tool/node execution metrics from LangGraph pipelines.
+-- ─────────────────────────────────────────────
+
+CREATE TABLE orchestration.pipeline_tool_metrics (
+    id              uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+    pipeline_run_id uuid NOT NULL REFERENCES orchestration.pipeline_runs(id) ON DELETE CASCADE,
+    tool_name       varchar(100) NOT NULL,
+    duration_ms     int,
+    records_in      int DEFAULT 0,
+    records_out     int DEFAULT 0,
+    status          varchar(20) DEFAULT 'completed',
+    error_message   text,
+    metadata        jsonb DEFAULT '{}',
+    created_at      timestamptz DEFAULT now()
+);
+
+CREATE INDEX idx_tool_metrics_run ON orchestration.pipeline_tool_metrics (pipeline_run_id);
+
+COMMENT ON TABLE orchestration.pipeline_tool_metrics
+    IS 'Per-tool execution metrics captured from LangGraph pipeline runs';
+
+
+-- ─────────────────────────────────────────────
+-- 10. PIPELINE LLM USAGE
+-- LLM token consumption and cost per pipeline run.
+-- ─────────────────────────────────────────────
+
+CREATE TABLE orchestration.pipeline_llm_usage (
+    id                      uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+    pipeline_run_id         uuid NOT NULL REFERENCES orchestration.pipeline_runs(id) ON DELETE CASCADE,
+    model                   varchar(100),
+    total_prompt_tokens     int DEFAULT 0,
+    total_completion_tokens int DEFAULT 0,
+    total_tokens            int DEFAULT 0,
+    total_cost_usd          numeric(10,6) DEFAULT 0,
+    llm_calls               int DEFAULT 0,
+    call_details            jsonb DEFAULT '[]',
+    created_at              timestamptz DEFAULT now()
+);
+
+CREATE INDEX idx_llm_usage_run ON orchestration.pipeline_llm_usage (pipeline_run_id);
+
+COMMENT ON TABLE orchestration.pipeline_llm_usage
+    IS 'LLM token usage and estimated cost per pipeline run';
+
+
+-- ─────────────────────────────────────────────
+-- 11. WEBHOOK DEAD-LETTER QUEUE
+-- Failed webhook events stored for auto-retry.
+-- Retry strategy: Conservative exponential backoff — 1min, 5min, 30min (max 3 retries)
+-- ─────────────────────────────────────────────
+
+CREATE TABLE orchestration.webhook_dead_letter (
+    id              uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+    payload         jsonb NOT NULL,
+    error_message   text,
+    error_details   jsonb,
+    retry_count     int DEFAULT 0,
+    max_retries     int DEFAULT 3,
+    status          varchar(20) DEFAULT 'pending',
+    next_retry_at   timestamptz,
+    last_retry_at   timestamptz,
+    resolved_at     timestamptz,
+    created_at      timestamptz DEFAULT now(),
+
+    CONSTRAINT dlq_status_check CHECK (
+        status IN ('pending', 'retrying', 'resolved', 'exhausted', 'discarded')
+    )
+);
+
+CREATE INDEX idx_dlq_status ON orchestration.webhook_dead_letter (status, next_retry_at);
+
+COMMENT ON TABLE orchestration.webhook_dead_letter
+    IS 'Retry strategy: Conservative exponential backoff — 1min, 5min, 30min (max 3 retries)';
 

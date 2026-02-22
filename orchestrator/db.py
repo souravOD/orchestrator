@@ -447,3 +447,207 @@ def get_alerts(
         q = q.eq("pipeline_name", pipeline_name)
     return (q.execute()).data or []
 
+
+# ══════════════════════════════════════════════════════
+# Pipeline Definitions — Settings
+# ══════════════════════════════════════════════════════
+
+def get_pipeline_timeout(pipeline_name: str) -> int | None:
+    """Return the configured timeout in seconds for a pipeline, or None."""
+    defn = get_pipeline_definition(pipeline_name)
+    if defn:
+        return defn.get("timeout_seconds")
+    return None
+
+
+def update_pipeline_definition(
+    pipeline_name: str,
+    **fields: Any,
+) -> Dict[str, Any]:
+    """Update arbitrary fields on a pipeline definition (e.g. timeout_seconds)."""
+    allowed = {"timeout_seconds", "is_active", "default_config", "description"}
+    patch = {k: v for k, v in fields.items() if k in allowed and v is not None}
+    if not patch:
+        return {}
+    patch["updated_at"] = _utcnow()
+    result = (
+        _orch_table("pipeline_definitions")
+        .update(patch)
+        .eq("pipeline_name", pipeline_name)
+        .execute()
+    )
+    return (result.data or [{}])[0]
+
+
+# ══════════════════════════════════════════════════════
+# Concurrent Run Prevention
+# ══════════════════════════════════════════════════════
+
+def has_running_flow(flow_name: str) -> bool:
+    """Check if a flow already has a run with status='running'."""
+    result = (
+        _orch_table("orchestration_runs")
+        .select("id")
+        .eq("flow_name", flow_name)
+        .eq("status", "running")
+        .limit(1)
+        .execute()
+    )
+    return len(result.data or []) > 0
+
+
+# ══════════════════════════════════════════════════════
+# Tool Metrics & LLM Usage
+# ══════════════════════════════════════════════════════
+
+def create_tool_metrics(
+    pipeline_run_id: str | UUID,
+    metrics_list: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Batch-insert tool-level metrics for a pipeline run."""
+    if not metrics_list:
+        return []
+    rows = [
+        {
+            "pipeline_run_id": str(pipeline_run_id),
+            "tool_name": m.get("tool_name", "unknown"),
+            "duration_ms": m.get("duration_ms"),
+            "records_in": m.get("records_in", 0),
+            "records_out": m.get("records_out", 0),
+            "status": m.get("status", "completed"),
+            "error_message": m.get("error"),
+            "metadata": m.get("metadata", {}),
+        }
+        for m in metrics_list
+    ]
+    result = _orch_table("pipeline_tool_metrics").insert(rows).execute()
+    logger.info(
+        "Stored %d tool metrics for pipeline_run %s",
+        len(rows), pipeline_run_id,
+    )
+    return result.data or []
+
+
+def create_llm_usage(
+    pipeline_run_id: str | UUID,
+    usage: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Insert LLM usage summary for a pipeline run."""
+    if not usage:
+        return {}
+    payload = {
+        "pipeline_run_id": str(pipeline_run_id),
+        "model": usage.get("model"),
+        "total_prompt_tokens": usage.get("total_prompt_tokens", 0),
+        "total_completion_tokens": usage.get("total_completion_tokens", 0),
+        "total_tokens": usage.get("total_tokens", 0),
+        "total_cost_usd": usage.get("total_cost_usd", 0),
+        "llm_calls": usage.get("llm_calls", 0),
+        "call_details": usage.get("calls", []),
+    }
+    result = _orch_table("pipeline_llm_usage").insert(payload).execute()
+    logger.info(
+        "Stored LLM usage for pipeline_run %s (tokens=%d, cost=$%.4f)",
+        pipeline_run_id,
+        usage.get("total_tokens", 0),
+        usage.get("total_cost_usd", 0),
+    )
+    return (result.data or [{}])[0]
+
+
+# ══════════════════════════════════════════════════════
+# Webhook Dead-Letter Queue
+# ══════════════════════════════════════════════════════
+
+def create_dead_letter(
+    payload: Dict[str, Any],
+    error_message: str,
+    error_details: Optional[Dict[str, Any]] = None,
+    next_retry_at: Optional[str] = None,
+    max_retries: int = 3,
+) -> Dict[str, Any]:
+    """Insert a failed webhook event into the dead-letter queue."""
+    row = {
+        "payload": payload,
+        "error_message": error_message,
+        "error_details": error_details or {},
+        "max_retries": max_retries,
+        "status": "pending",
+        "next_retry_at": next_retry_at,
+    }
+    result = _orch_table("webhook_dead_letter").insert(row).execute()
+    logger.warning(
+        "Webhook sent to DLQ: %s (next_retry=%s)",
+        error_message, next_retry_at,
+    )
+    return (result.data or [{}])[0]
+
+
+def list_dead_letters(
+    status: Optional[str] = None,
+    limit: int = 50,
+) -> List[Dict[str, Any]]:
+    """List DLQ entries, optionally filtered by status."""
+    query = (
+        _orch_table("webhook_dead_letter")
+        .select("*")
+        .order("created_at", desc=True)
+        .limit(limit)
+    )
+    if status:
+        query = query.eq("status", status)
+    result = query.execute()
+    return result.data or []
+
+
+def get_retryable_dead_letters() -> List[Dict[str, Any]]:
+    """Get DLQ entries that are due for retry (next_retry_at <= now)."""
+    result = (
+        _orch_table("webhook_dead_letter")
+        .select("*")
+        .in_("status", ["pending", "retrying"])
+        .lte("next_retry_at", _utcnow())
+        .order("next_retry_at", desc=False)
+        .limit(50)
+        .execute()
+    )
+    return result.data or []
+
+
+def update_dead_letter(
+    dead_letter_id: str | UUID,
+    **fields: Any,
+) -> Dict[str, Any]:
+    """Update a DLQ entry (status, retry_count, next_retry_at, etc.)."""
+    allowed = {
+        "status", "retry_count", "next_retry_at",
+        "last_retry_at", "resolved_at", "error_message",
+    }
+    patch = {k: v for k, v in fields.items() if k in allowed}
+    if not patch:
+        return {}
+    result = (
+        _orch_table("webhook_dead_letter")
+        .update(patch)
+        .eq("id", str(dead_letter_id))
+        .execute()
+    )
+    return (result.data or [{}])[0]
+
+
+# ══════════════════════════════════════════════════════
+# Checkpoint / Resume Helpers
+# ══════════════════════════════════════════════════════
+
+def list_completed_pipeline_runs(
+    orchestration_run_id: str | UUID,
+) -> List[Dict[str, Any]]:
+    """Return pipeline runs that completed successfully for a given orch run."""
+    result = (
+        _orch_table("pipeline_runs")
+        .select("id, pipeline_name, status")
+        .eq("orchestration_run_id", str(orchestration_run_id))
+        .eq("status", "completed")
+        .execute()
+    )
+    return result.data or []

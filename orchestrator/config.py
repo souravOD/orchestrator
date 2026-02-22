@@ -31,6 +31,11 @@ class OrchestratorSettings(BaseSettings):
     orchestrator_max_retries: int = 3
     orchestrator_retry_delay_seconds: int = 60
 
+    # ── Webhook DLQ ───────────────────────────────────
+    dlq_max_retries: int = 3
+    dlq_retry_delays_minutes: str = "1,5,30"  # conservative exponential backoff
+    dlq_poll_interval_seconds: int = 30
+
     # ── Webhook server ────────────────────────────────
     webhook_host: str = "0.0.0.0"
     webhook_port: int = 8100

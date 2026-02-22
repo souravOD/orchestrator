@@ -15,9 +15,12 @@ Or via the CLI::
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import logging
+import traceback
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, Header, HTTPException, Request
@@ -35,6 +38,15 @@ app = FastAPI(
     description="Production-grade orchestration for medallion architecture pipelines",
     version="0.1.0",
 )
+
+
+@app.on_event("startup")
+async def _start_dlq_worker():
+    """Start the DLQ background retry worker."""
+    from .dlq_worker import dlq_background_loop
+    asyncio.create_task(dlq_background_loop())
+    logger.info("DLQ background worker scheduled")
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -89,7 +101,21 @@ async def receive_supabase_webhook(
         result = handle_webhook_event(payload)
         return {"status": "accepted", "result": _safe_serialise(result)}
     except Exception as exc:
-        logger.error("Webhook processing failed: %s", exc)
+        logger.error("Webhook processing failed — sending to DLQ: %s", exc)
+        # Insert into dead-letter queue for auto-retry
+        next_retry = (
+            datetime.now(timezone.utc) + timedelta(minutes=1)
+        ).isoformat()
+        try:
+            db.create_dead_letter(
+                payload=payload,
+                error_message=str(exc),
+                error_details={"traceback": traceback.format_exc()},
+                next_retry_at=next_retry,
+                max_retries=settings.dlq_max_retries,
+            )
+        except Exception as dlq_exc:
+            logger.error("Failed to insert into DLQ: %s", dlq_exc)
         raise HTTPException(status_code=500, detail=str(exc))
 
 
@@ -179,6 +205,90 @@ async def list_pipelines():
     """List all registered pipeline definitions."""
     pipelines = db.list_pipeline_definitions()
     return {"pipelines": pipelines, "count": len(pipelines)}
+
+
+@app.put("/api/pipelines/{name}/settings")
+async def update_pipeline_settings(name: str, request: Request):
+    """Update a pipeline's settings (e.g. timeout_seconds, is_active)."""
+    pipeline_def = db.get_pipeline_definition(name)
+    if not pipeline_def:
+        raise HTTPException(status_code=404, detail=f"Pipeline not found: {name}")
+
+    body = await request.json()
+    allowed_fields = {"timeout_seconds", "is_active", "description"}
+    updates = {k: v for k, v in body.items() if k in allowed_fields}
+
+    if not updates:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No valid fields to update. Allowed: {allowed_fields}",
+        )
+
+    result = db.update_pipeline_definition(name, **updates)
+    logger.info("Updated pipeline %s settings: %s", name, updates)
+    return {"pipeline": name, "updated": updates, "result": result}
+
+
+@app.post("/api/runs/{run_id}/cancel")
+async def cancel_run(run_id: str):
+    """Cancel a running orchestration flow (cooperative DB polling)."""
+    run = db.get_orchestration_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    if run["status"] not in ("pending", "running", "queued"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot cancel run with status '{run['status']}'",
+        )
+    db.update_orchestration_run(
+        run_id,
+        status="cancelled",
+        completed_at=datetime.now(timezone.utc).isoformat(),
+    )
+    logger.info("Cancelled orchestration run %s", run_id)
+    return {"cancelled": True, "run_id": run_id}
+
+
+@app.post("/api/runs/{run_id}/retry")
+async def retry_run(run_id: str):
+    """Resume a failed run from the last completed layer."""
+    original = db.get_orchestration_run(run_id)
+    if not original:
+        raise HTTPException(status_code=404, detail="Run not found")
+    if original["status"] != "failed":
+        raise HTTPException(
+            status_code=400,
+            detail="Can only retry failed runs",
+        )
+
+    from .flows import FLOW_REGISTRY
+    flow_name = original.get("flow_name")
+    flow_fn = FLOW_REGISTRY.get(flow_name)
+    if not flow_fn:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown flow: {flow_name}",
+        )
+
+    original_config = original.get("config", {}) or {}
+    kwargs: Dict[str, Any] = {
+        "trigger_type": "retry",
+        "triggered_by": f"retry:{run_id}",
+        "config": original_config,
+        "resume_from_run_id": run_id,
+    }
+
+    # Re-add flow-specific params from the original config
+    if flow_name == "full_ingestion":
+        kwargs["source_name"] = original_config.get("source_name", "retry")
+        kwargs["input_path"] = original_config.get("input_path")
+
+    try:
+        result = flow_fn(**kwargs)
+        return {"status": "retried", "result": _safe_serialise(result)}
+    except Exception as exc:
+        logger.error("Retry of run %s failed: %s", run_id, exc)
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 # ══════════════════════════════════════════════════════
@@ -284,6 +394,61 @@ async def list_alerts(
     """List recent alerts."""
     alerts = db.get_alerts(limit=limit, severity=severity, pipeline_name=pipeline_name)
     return {"alerts": alerts, "count": len(alerts)}
+
+
+# ══════════════════════════════════════════════════════
+# Dead-Letter Queue Endpoints
+# ══════════════════════════════════════════════════════
+
+@app.get("/api/dead-letters")
+async def list_dead_letters(
+    status: Optional[str] = None,
+    limit: int = 50,
+):
+    """List DLQ entries, optionally filtered by status."""
+    entries = db.list_dead_letters(status=status, limit=limit)
+    return {"dead_letters": entries, "count": len(entries)}
+
+
+@app.post("/api/dead-letters/{entry_id}/retry")
+async def retry_dead_letter(entry_id: str):
+    """Manually retry a specific DLQ entry."""
+    entries = db.list_dead_letters(limit=1)
+    entry = next((e for e in db.list_dead_letters(limit=200) if e["id"] == entry_id), None)
+    if not entry:
+        raise HTTPException(status_code=404, detail=f"DLQ entry not found: {entry_id}")
+    if entry["status"] in ("resolved", "discarded"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot retry entry with status '{entry['status']}'",
+        )
+
+    try:
+        result = handle_webhook_event(entry["payload"])
+        db.update_dead_letter(
+            entry_id,
+            status="resolved",
+            resolved_at=datetime.now(timezone.utc).isoformat(),
+            retry_count=entry.get("retry_count", 0) + 1,
+        )
+        return {"status": "resolved", "result": _safe_serialise(result)}
+    except Exception as exc:
+        db.update_dead_letter(
+            entry_id,
+            error_message=str(exc),
+            retry_count=entry.get("retry_count", 0) + 1,
+            last_retry_at=datetime.now(timezone.utc).isoformat(),
+        )
+        raise HTTPException(status_code=500, detail=f"Retry failed: {exc}")
+
+
+@app.delete("/api/dead-letters/{entry_id}")
+async def discard_dead_letter(entry_id: str):
+    """Discard a DLQ entry (sets status to 'discarded')."""
+    result = db.update_dead_letter(entry_id, status="discarded")
+    if not result:
+        raise HTTPException(status_code=404, detail=f"DLQ entry not found: {entry_id}")
+    return {"status": "discarded", "entry_id": entry_id}
 
 
 # ══════════════════════════════════════════════════════

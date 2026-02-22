@@ -1,6 +1,6 @@
 export default function StatusBadge({ status }: { status: string }) {
     const label = status.replace(/_/g, " ");
-    const showDot = status === "running";
+    const showDot = status === "running" || status === "retrying";
 
     return (
         <span className={`badge ${status}`}>

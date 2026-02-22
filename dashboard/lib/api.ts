@@ -92,6 +92,21 @@ export interface PipelineDefinition {
     layer_to: string;
     description: string | null;
     is_active: boolean;
+    timeout_seconds: number | null;
+}
+
+export interface DeadLetter {
+    id: string;
+    payload: Record<string, unknown>;
+    error_message: string | null;
+    error_details: Record<string, unknown> | null;
+    retry_count: number;
+    max_retries: number;
+    status: string;
+    next_retry_at: string | null;
+    last_retry_at: string | null;
+    resolved_at: string | null;
+    created_at: string;
 }
 
 export interface PipelineHealth {
@@ -155,4 +170,44 @@ export const api = {
             `/api/alerts?${params}`
         );
     },
+
+    // ── Cancel / Retry ─────────────────────────────────
+
+    cancelRun: (id: string) =>
+        fetchApi<{ cancelled: boolean; run_id: string }>(`/api/runs/${id}/cancel`, {
+            method: "POST",
+        }),
+
+    retryRun: (id: string) =>
+        fetchApi<{ status: string; result: unknown }>(`/api/runs/${id}/retry`, {
+            method: "POST",
+        }),
+
+    // ── Pipeline Settings ──────────────────────────────
+
+    updatePipelineSettings: (name: string, settings: Record<string, unknown>) =>
+        fetchApi<{ pipeline: string; updated: Record<string, unknown> }>(
+            `/api/pipelines/${name}/settings`,
+            { method: "PUT", body: JSON.stringify(settings) }
+        ),
+
+    // ── Dead-Letter Queue ──────────────────────────────
+
+    listDeadLetters: (status?: string, limit = 50) => {
+        const params = new URLSearchParams({ limit: String(limit) });
+        if (status) params.set("status", status);
+        return fetchApi<{ dead_letters: DeadLetter[]; count: number }>(
+            `/api/dead-letters?${params}`
+        );
+    },
+
+    retryDeadLetter: (id: string) =>
+        fetchApi<{ status: string }>(`/api/dead-letters/${id}/retry`, {
+            method: "POST",
+        }),
+
+    discardDeadLetter: (id: string) =>
+        fetchApi<{ status: string }>(`/api/dead-letters/${id}`, {
+            method: "DELETE",
+        }),
 };

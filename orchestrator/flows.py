@@ -30,6 +30,8 @@ from prefect import flow
 from . import db
 from .config import settings
 from .pipelines import (
+    FlowCancelledError,
+    PipelineTimeoutError,
     run_bronze_to_silver,
     run_gold_to_neo4j_batch,
     run_gold_to_neo4j_realtime,
@@ -39,6 +41,34 @@ from .pipelines import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class ConcurrentRunError(RuntimeError):
+    """Raised when a flow is already running and cannot start a new one."""
+    def __init__(self, flow_name: str):
+        super().__init__(f"Flow '{flow_name}' is already running. Concurrent runs are not allowed.")
+
+
+def _guard_concurrent(flow_name: str) -> None:
+    """Raise ConcurrentRunError if the flow already has a running run."""
+    if db.has_running_flow(flow_name):
+        raise ConcurrentRunError(flow_name)
+
+
+def _send_success_notification(flow_name: str, orch_run_id: str, duration: float, **extra) -> None:
+    """Best-effort success notification via AlertDispatcher."""
+    try:
+        from .alerts import send_alert
+        details = ", ".join(f"{k}={v}" for k, v in extra.items() if v)
+        send_alert(
+            title=f"✅ {flow_name} completed in {duration:.1f}s",
+            message=details or "No additional details",
+            severity="info",
+            pipeline_name=flow_name,
+            run_id=str(orch_run_id),
+        )
+    except Exception as exc:
+        logger.debug("Success notification failed (non-fatal): %s", exc)
 
 
 # ══════════════════════════════════════════════════════
@@ -57,6 +87,7 @@ def full_ingestion_flow(
     trigger_type: str = "manual",
     triggered_by: Optional[str] = None,
     config: Optional[Dict[str, Any]] = None,
+    resume_from_run_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Full medallion pipeline execution.
@@ -68,9 +99,22 @@ def full_ingestion_flow(
     cfg = config or {}
     start = time.time()
 
+    # Concurrency guard
+    _guard_concurrent("full_ingestion")
+
+    # Input validation
+    from .models import IngestionInput
+    validated = IngestionInput(
+        source_name=source_name,
+        raw_input=raw_input,
+        input_path=input_path,
+    )
+
     # Load input from file if needed
-    if raw_input is None and input_path:
-        raw_input = _load_input(input_path)
+    if validated.raw_input is None and validated.input_path:
+        raw_input = _load_input(validated.input_path)
+    else:
+        raw_input = validated.raw_input
     if raw_input is None:
         raw_input = []
 
@@ -90,66 +134,91 @@ def full_ingestion_flow(
     total_dq = 0
     errors = 0
 
+    # Determine completed layers if resuming
+    completed_layers: set = set()
+    if resume_from_run_id:
+        completed = db.list_completed_pipeline_runs(resume_from_run_id)
+        completed_layers = {r["pipeline_name"] for r in completed}
+        logger.info("⏭️ Resuming from run %s. Skipping: %s", resume_from_run_id, completed_layers)
+
     try:
         # ── Layer 1: PreBronze → Bronze ──
-        bronze_result = run_prebronze_to_bronze(
-            orchestration_run_id=orch_run_id,
-            source_name=source_name,
-            raw_input=raw_input,
-            trigger_type=trigger_type,
-            triggered_by=triggered_by,
-            config=cfg,
-        )
-        results["prebronze_to_bronze"] = bronze_result
-        total_written += bronze_result.get("records_loaded", 0)
-
-        # ── Layer 2: Bronze → Silver ──
-        silver_result = run_bronze_to_silver(
-            orchestration_run_id=orch_run_id,
-            trigger_type="upstream_complete",
-            triggered_by="prebronze_to_bronze",
-            config=cfg,
-        )
-        results["bronze_to_silver"] = silver_result
-        total_written += silver_result.get("total_written", 0)
-        total_dq += silver_result.get("total_dq_issues", 0)
-
-        # ── Layer 3: Silver → Gold ──
-        gold_result = run_silver_to_gold(
-            orchestration_run_id=orch_run_id,
-            trigger_type="upstream_complete",
-            triggered_by="bronze_to_silver",
-            config=cfg,
-        )
-        results["silver_to_gold"] = gold_result
-        total_written += gold_result.get("total_written", 0)
-
-        # ── Layer 4: Gold → Neo4j (best-effort) ──
-        try:
-            neo4j_result = run_gold_to_neo4j_batch(
+        if "prebronze_to_bronze" not in completed_layers:
+            bronze_result = run_prebronze_to_bronze(
                 orchestration_run_id=orch_run_id,
-                layer="all",
-                trigger_type="upstream_complete",
-                triggered_by="silver_to_gold",
+                source_name=source_name,
+                raw_input=raw_input,
+                trigger_type=trigger_type,
+                triggered_by=triggered_by,
                 config=cfg,
             )
-            results["gold_to_neo4j"] = neo4j_result
-            logger.info("✅ Gold→Neo4j sync completed as part of full ingestion")
-        except Exception as neo4j_exc:
-            # Neo4j sync failure should not fail the overall ingestion
-            logger.warning("⚠️ Gold→Neo4j sync failed (non-fatal): %s", neo4j_exc)
-            results["gold_to_neo4j"] = {"status": "failed", "error": str(neo4j_exc)}
+            results["prebronze_to_bronze"] = bronze_result
+            total_written += bronze_result.get("records_loaded", 0)
+        else:
+            logger.info("⏭️ Skipping prebronze_to_bronze (already completed)")
+
+        # ── Layer 2: Bronze → Silver ──
+        if "bronze_to_silver" not in completed_layers:
+            silver_result = run_bronze_to_silver(
+                orchestration_run_id=orch_run_id,
+                trigger_type="upstream_complete",
+                triggered_by="prebronze_to_bronze",
+                config=cfg,
+            )
+            results["bronze_to_silver"] = silver_result
+            total_written += silver_result.get("total_written", 0)
+            total_dq += silver_result.get("total_dq_issues", 0)
+        else:
+            logger.info("⏭️ Skipping bronze_to_silver (already completed)")
+
+        # ── Layer 3: Silver → Gold ──
+        if "silver_to_gold" not in completed_layers:
+            gold_result = run_silver_to_gold(
+                orchestration_run_id=orch_run_id,
+                trigger_type="upstream_complete",
+                triggered_by="bronze_to_silver",
+                config=cfg,
+            )
+            results["silver_to_gold"] = gold_result
+            total_written += gold_result.get("total_written", 0)
+        else:
+            logger.info("⏭️ Skipping silver_to_gold (already completed)")
+
+        # ── Layer 4: Gold → Neo4j (best-effort) ──
+        if "gold_to_neo4j" not in completed_layers:
+            try:
+                neo4j_result = run_gold_to_neo4j_batch(
+                    orchestration_run_id=orch_run_id,
+                    layer="all",
+                    trigger_type="upstream_complete",
+                    triggered_by="silver_to_gold",
+                    config=cfg,
+                )
+                results["gold_to_neo4j"] = neo4j_result
+                logger.info("✅ Gold→Neo4j sync completed as part of full ingestion")
+            except Exception as neo4j_exc:
+                # Neo4j sync failure should not fail the overall ingestion
+                logger.warning("⚠️ Gold→Neo4j sync failed (non-fatal): %s", neo4j_exc)
+                results["gold_to_neo4j"] = {"status": "failed", "error": str(neo4j_exc)}
+        else:
+            logger.info("⏭️ Skipping gold_to_neo4j (already completed)")
 
         # Mark success
+        duration = round(time.time() - start, 2)
         db.update_orchestration_run(
             orch_run_id,
             status="completed",
             total_records_written=total_written,
             total_dq_issues=total_dq,
             completed_at=db._utcnow(),
-            duration_seconds=round(time.time() - start, 2),
+            duration_seconds=duration,
         )
-        logger.info("✅ Full ingestion completed in %.1fs. Total written=%d", time.time() - start, total_written)
+        logger.info("✅ Full ingestion completed in %.1fs. Total written=%d", duration, total_written)
+
+        _send_success_notification(
+            "full_ingestion", orch_run_id, duration,
+            total_written=total_written, total_dq=total_dq,
+        )
         return results
 
     except Exception as exc:
@@ -184,6 +253,8 @@ def bronze_to_gold_flow(
     """Run Bronze→Silver and Silver→Gold in sequence."""
     cfg = config or {}
     start = time.time()
+
+    _guard_concurrent("bronze_to_gold")
 
     orch_run = db.create_orchestration_run(
         flow_name="bronze_to_gold",
@@ -429,6 +500,8 @@ def neo4j_batch_sync_flow(
     Runs the catalog_batch service for the specified layer(s).
     Layer order: recipes → ingredients → products → customers.
     """
+    _guard_concurrent("neo4j_batch_sync")
+
     orch_run = db.create_orchestration_run(
         flow_name="neo4j_batch_sync",
         trigger_type=trigger_type,
@@ -483,6 +556,8 @@ def neo4j_reconciliation_flow(
     Detects drift via count/checksum comparison and proposes
     LLM-guided backfills.
     """
+    _guard_concurrent("neo4j_reconciliation")
+
     orch_run = db.create_orchestration_run(
         flow_name="neo4j_reconciliation",
         trigger_type=trigger_type,
