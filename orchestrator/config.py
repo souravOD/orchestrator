@@ -1,0 +1,78 @@
+"""
+Configuration
+==============
+
+Pydantic Settings for environment-based configuration.
+"""
+
+from __future__ import annotations
+
+import os
+from typing import Optional
+
+from pydantic_settings import BaseSettings
+
+
+class OrchestratorSettings(BaseSettings):
+    """Central configuration loaded from environment variables / .env file."""
+
+    # ── Supabase ──────────────────────────────────────
+    supabase_url: str = ""
+    supabase_service_role_key: str = ""
+
+    # ── OpenAI (for LLM-augmented pipeline steps) ────
+    openai_api_key: Optional[str] = None
+    openai_model_name: str = "gpt-4o-mini"
+    openai_base_url: Optional[str] = None
+
+    # ── Orchestrator defaults ─────────────────────────
+    orchestrator_log_level: str = "INFO"
+    orchestrator_default_batch_size: int = 100
+    orchestrator_max_retries: int = 3
+    orchestrator_retry_delay_seconds: int = 60
+
+    # ── Webhook server ────────────────────────────────
+    webhook_host: str = "0.0.0.0"
+    webhook_port: int = 8100
+    webhook_secret: str = ""
+
+    # ── Neo4j (passed through to Gold-to-Neo4j pipeline) ─
+    neo4j_uri: str = ""
+    neo4j_user: str = "neo4j"
+    neo4j_password: str = ""
+    neo4j_database: str = "neo4j"
+    neo4j_realtime_poll_interval: int = 5  # seconds
+
+    # ── Agentic schema drift ─────────────────────────
+    agent_llm_model: str = "gpt-4.1-mini"
+    drift_confidence_threshold: float = 0.85
+    drift_agent_name_threshold: float = 0.7
+
+    # ── Alerting: Email (SMTP) ───────────────────────
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_use_tls: bool = True
+    alert_email_from: str = ""
+    alert_email_to: str = ""  # comma-separated list
+
+    # ── Alerting: GitHub Issues ──────────────────────
+    github_token: str = ""
+    github_repo: str = ""  # "owner/repo"
+
+    # ── CrewAI ───────────────────────────────────────
+    crewai_enabled: bool = False
+
+    # ── Gold-to-Neo4j pipeline path ──────────────────
+    neo4j_pipeline_dir: str = "Gold-to-Neo4j_with_agentic_checks/Gold-to-Neo4j_services"
+
+    model_config = {
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "extra": "ignore",
+    }
+
+
+# Singleton – import this wherever you need config
+settings = OrchestratorSettings()

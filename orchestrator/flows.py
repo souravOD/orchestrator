@@ -1,0 +1,588 @@
+"""
+Flow Definitions
+=================
+
+Prefect ``@flow``-decorated functions that compose pipeline tasks into
+end-to-end orchestration workflows.
+
+Available flows
+---------------
+
+- ``full_ingestion_flow``      – PreBronze → Bronze → Silver → Gold
+- ``bronze_to_gold_flow``      – Bronze → Silver → Gold  (bronze already loaded)
+- ``single_layer_flow``        – Run any single layer by name
+- ``realtime_event_flow``      – Lightweight flow for real-time DB events
+- ``neo4j_batch_sync_flow``    – Gold → Neo4j batch sync (all layers)
+- ``neo4j_reconciliation_flow`` – Gold↔Neo4j drift detection
+- ``neo4j_realtime_worker_flow`` – Customer realtime outbox poller
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import time
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+from prefect import flow
+
+from . import db
+from .config import settings
+from .pipelines import (
+    run_bronze_to_silver,
+    run_gold_to_neo4j_batch,
+    run_gold_to_neo4j_realtime,
+    run_gold_to_neo4j_reconciliation,
+    run_prebronze_to_bronze,
+    run_silver_to_gold,
+)
+
+logger = logging.getLogger(__name__)
+
+
+# ══════════════════════════════════════════════════════
+# Flow 1: Full Ingestion (PreBronze → Bronze → Silver → Gold)
+# ══════════════════════════════════════════════════════
+
+@flow(
+    name="full_ingestion",
+    description="End-to-end pipeline: PreBronze → Bronze → Silver → Gold → Neo4j",
+    log_prints=True,
+)
+def full_ingestion_flow(
+    source_name: str,
+    raw_input: Optional[List[Dict[str, Any]]] = None,
+    input_path: Optional[str] = None,
+    trigger_type: str = "manual",
+    triggered_by: Optional[str] = None,
+    config: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Full medallion pipeline execution.
+
+    Provide data as either ``raw_input`` (list of dicts) or
+    ``input_path`` (path to a CSV/JSON/NDJSON file that the
+    PreBronze pipeline will read).
+    """
+    cfg = config or {}
+    start = time.time()
+
+    # Load input from file if needed
+    if raw_input is None and input_path:
+        raw_input = _load_input(input_path)
+    if raw_input is None:
+        raw_input = []
+
+    # Create top-level orchestration run
+    orch_run = db.create_orchestration_run(
+        flow_name="full_ingestion",
+        trigger_type=trigger_type,
+        triggered_by=triggered_by,
+        layers=["prebronze_to_bronze", "bronze_to_silver", "silver_to_gold", "gold_to_neo4j"],
+        config=cfg,
+    )
+    orch_run_id = orch_run["id"]
+    logger.info("🔄 Orchestration run %s — full_ingestion started", orch_run_id)
+
+    results: Dict[str, Any] = {}
+    total_written = 0
+    total_dq = 0
+    errors = 0
+
+    try:
+        # ── Layer 1: PreBronze → Bronze ──
+        bronze_result = run_prebronze_to_bronze(
+            orchestration_run_id=orch_run_id,
+            source_name=source_name,
+            raw_input=raw_input,
+            trigger_type=trigger_type,
+            triggered_by=triggered_by,
+            config=cfg,
+        )
+        results["prebronze_to_bronze"] = bronze_result
+        total_written += bronze_result.get("records_loaded", 0)
+
+        # ── Layer 2: Bronze → Silver ──
+        silver_result = run_bronze_to_silver(
+            orchestration_run_id=orch_run_id,
+            trigger_type="upstream_complete",
+            triggered_by="prebronze_to_bronze",
+            config=cfg,
+        )
+        results["bronze_to_silver"] = silver_result
+        total_written += silver_result.get("total_written", 0)
+        total_dq += silver_result.get("total_dq_issues", 0)
+
+        # ── Layer 3: Silver → Gold ──
+        gold_result = run_silver_to_gold(
+            orchestration_run_id=orch_run_id,
+            trigger_type="upstream_complete",
+            triggered_by="bronze_to_silver",
+            config=cfg,
+        )
+        results["silver_to_gold"] = gold_result
+        total_written += gold_result.get("total_written", 0)
+
+        # ── Layer 4: Gold → Neo4j (best-effort) ──
+        try:
+            neo4j_result = run_gold_to_neo4j_batch(
+                orchestration_run_id=orch_run_id,
+                layer="all",
+                trigger_type="upstream_complete",
+                triggered_by="silver_to_gold",
+                config=cfg,
+            )
+            results["gold_to_neo4j"] = neo4j_result
+            logger.info("✅ Gold→Neo4j sync completed as part of full ingestion")
+        except Exception as neo4j_exc:
+            # Neo4j sync failure should not fail the overall ingestion
+            logger.warning("⚠️ Gold→Neo4j sync failed (non-fatal): %s", neo4j_exc)
+            results["gold_to_neo4j"] = {"status": "failed", "error": str(neo4j_exc)}
+
+        # Mark success
+        db.update_orchestration_run(
+            orch_run_id,
+            status="completed",
+            total_records_written=total_written,
+            total_dq_issues=total_dq,
+            completed_at=db._utcnow(),
+            duration_seconds=round(time.time() - start, 2),
+        )
+        logger.info("✅ Full ingestion completed in %.1fs. Total written=%d", time.time() - start, total_written)
+        return results
+
+    except Exception as exc:
+        errors += 1
+        db.update_orchestration_run(
+            orch_run_id,
+            status="failed",
+            total_errors=errors,
+            total_records_written=total_written,
+            total_dq_issues=total_dq,
+            completed_at=db._utcnow(),
+            duration_seconds=round(time.time() - start, 2),
+        )
+        logger.error("❌ Full ingestion FAILED: %s", exc)
+        raise
+
+
+# ══════════════════════════════════════════════════════
+# Flow 2: Bronze → Gold (skip PreBronze)
+# ══════════════════════════════════════════════════════
+
+@flow(
+    name="bronze_to_gold",
+    description="Transform pipeline: Bronze → Silver → Gold (Bronze already loaded)",
+    log_prints=True,
+)
+def bronze_to_gold_flow(
+    trigger_type: str = "manual",
+    triggered_by: Optional[str] = None,
+    config: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Run Bronze→Silver and Silver→Gold in sequence."""
+    cfg = config or {}
+    start = time.time()
+
+    orch_run = db.create_orchestration_run(
+        flow_name="bronze_to_gold",
+        trigger_type=trigger_type,
+        triggered_by=triggered_by,
+        layers=["bronze_to_silver", "silver_to_gold"],
+        config=cfg,
+    )
+    orch_run_id = orch_run["id"]
+    results: Dict[str, Any] = {}
+
+    try:
+        silver_result = run_bronze_to_silver(
+            orchestration_run_id=orch_run_id,
+            trigger_type=trigger_type,
+            triggered_by=triggered_by,
+            config=cfg,
+        )
+        results["bronze_to_silver"] = silver_result
+
+        gold_result = run_silver_to_gold(
+            orchestration_run_id=orch_run_id,
+            trigger_type="upstream_complete",
+            triggered_by="bronze_to_silver",
+            config=cfg,
+        )
+        results["silver_to_gold"] = gold_result
+
+        db.update_orchestration_run(
+            orch_run_id,
+            status="completed",
+            total_records_written=(
+                silver_result.get("total_written", 0) +
+                gold_result.get("total_written", 0)
+            ),
+            completed_at=db._utcnow(),
+            duration_seconds=round(time.time() - start, 2),
+        )
+        return results
+
+    except Exception as exc:
+        db.update_orchestration_run(
+            orch_run_id,
+            status="failed",
+            completed_at=db._utcnow(),
+            duration_seconds=round(time.time() - start, 2),
+        )
+        raise
+
+
+# ══════════════════════════════════════════════════════
+# Flow 3: Single Layer
+# ══════════════════════════════════════════════════════
+
+LAYER_TASKS = {
+    "prebronze_to_bronze": run_prebronze_to_bronze,
+    "bronze_to_silver": run_bronze_to_silver,
+    "silver_to_gold": run_silver_to_gold,
+}
+
+
+@flow(
+    name="single_layer",
+    description="Run a single pipeline layer by name",
+    log_prints=True,
+)
+def single_layer_flow(
+    layer: str,
+    source_name: Optional[str] = None,
+    raw_input: Optional[List[Dict[str, Any]]] = None,
+    input_path: Optional[str] = None,
+    trigger_type: str = "manual",
+    triggered_by: Optional[str] = None,
+    config: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Run a single pipeline layer.  Useful for re-runs or targeted
+    processing.
+    """
+    cfg = config or {}
+
+    if layer not in LAYER_TASKS:
+        raise ValueError(
+            f"Unknown layer: {layer}. "
+            f"Valid layers: {list(LAYER_TASKS.keys())}"
+        )
+
+    orch_run = db.create_orchestration_run(
+        flow_name=f"single_layer:{layer}",
+        trigger_type=trigger_type,
+        triggered_by=triggered_by,
+        layers=[layer],
+        config=cfg,
+    )
+    orch_run_id = orch_run["id"]
+    start = time.time()
+
+    try:
+        if layer == "prebronze_to_bronze":
+            if raw_input is None and input_path:
+                raw_input = _load_input(input_path)
+            result = run_prebronze_to_bronze(
+                orchestration_run_id=orch_run_id,
+                source_name=source_name or "unknown",
+                raw_input=raw_input or [],
+                trigger_type=trigger_type,
+                triggered_by=triggered_by,
+                config=cfg,
+            )
+        else:
+            task_fn = LAYER_TASKS[layer]
+            result = task_fn(
+                orchestration_run_id=orch_run_id,
+                trigger_type=trigger_type,
+                triggered_by=triggered_by,
+                config=cfg,
+            )
+
+        db.update_orchestration_run(
+            orch_run_id,
+            status="completed",
+            completed_at=db._utcnow(),
+            duration_seconds=round(time.time() - start, 2),
+        )
+        return result
+
+    except Exception:
+        db.update_orchestration_run(
+            orch_run_id,
+            status="failed",
+            completed_at=db._utcnow(),
+            duration_seconds=round(time.time() - start, 2),
+        )
+        raise
+
+
+# ══════════════════════════════════════════════════════
+# Flow 4: Real-time Event
+# ══════════════════════════════════════════════════════
+
+@flow(
+    name="realtime_event",
+    description="Lightweight flow for real-time database events",
+    log_prints=True,
+)
+def realtime_event_flow(
+    event_type: str,
+    source_schema: str,
+    source_table: str,
+    record: Dict[str, Any],
+    config: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Handle a real-time database event (e.g. Supabase webhook).
+
+    This flow determines which pipeline(s) to trigger based on the
+    event source and dispatches accordingly.
+    """
+    cfg = config or {}
+
+    # Determine the target layer based on source schema
+    layer_mapping = {
+        "public": "prebronze_to_bronze",   # raw data → bronze
+        "bronze": "bronze_to_silver",       # bronze → silver
+        "silver": "silver_to_gold",         # silver → gold
+    }
+
+    target_layer = layer_mapping.get(source_schema)
+    if not target_layer:
+        logger.warning(
+            "No pipeline mapping for schema=%s, table=%s. Skipping.",
+            source_schema, source_table,
+        )
+        return {"skipped": True, "reason": f"No mapping for {source_schema}.{source_table}"}
+
+    logger.info(
+        "📡 Real-time event: %s on %s.%s → triggering %s",
+        event_type, source_schema, source_table, target_layer,
+    )
+
+    return single_layer_flow(
+        layer=target_layer,
+        source_name=f"realtime:{source_table}",
+        raw_input=[record] if target_layer == "prebronze_to_bronze" else None,
+        trigger_type="webhook",
+        triggered_by=f"{source_schema}.{source_table}",
+        config=cfg,
+    )
+
+
+# ══════════════════════════════════════════════════════
+# Helpers
+# ══════════════════════════════════════════════════════
+
+def _load_input(path: str) -> List[Dict[str, Any]]:
+    """Load data from a file (CSV, JSON, or NDJSON)."""
+    file_path = Path(path)
+    if not file_path.exists():
+        raise FileNotFoundError(f"Input file not found: {path}")
+
+    suffix = file_path.suffix.lower()
+
+    if suffix == ".json":
+        with open(file_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data if isinstance(data, list) else [data]
+
+    elif suffix in (".ndjson", ".jsonl"):
+        records = []
+        with open(file_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    records.append(json.loads(line))
+        return records
+
+    elif suffix == ".csv":
+        try:
+            import pandas as pd
+            df = pd.read_csv(file_path)
+            return df.to_dict(orient="records")
+        except ImportError:
+            raise ImportError("pandas is required for CSV files: pip install pandas")
+
+    else:
+        raise ValueError(f"Unsupported file format: {suffix}. Use .json, .ndjson, or .csv")
+
+
+# ══════════════════════════════════════════════════════
+# Flow 5: Neo4j Batch Sync
+# ══════════════════════════════════════════════════════
+
+@flow(name="neo4j_batch_sync", retries=0)
+def neo4j_batch_sync_flow(
+    layer: str = "all",
+    trigger_type: str = "manual",
+    triggered_by: Optional[str] = None,
+    config: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Gold → Neo4j batch sync flow.
+
+    Runs the catalog_batch service for the specified layer(s).
+    Layer order: recipes → ingredients → products → customers.
+    """
+    orch_run = db.create_orchestration_run(
+        flow_name="neo4j_batch_sync",
+        trigger_type=trigger_type,
+        triggered_by=triggered_by,
+        flow_type="batch",
+        layers=["gold_to_neo4j"],
+        config=config,
+    )
+    orch_run_id = orch_run["id"]
+    start = time.time()
+
+    try:
+        result = run_gold_to_neo4j_batch(
+            orchestration_run_id=orch_run_id,
+            layer=layer,
+            trigger_type=trigger_type,
+            triggered_by=triggered_by,
+            config=config,
+        )
+        db.update_orchestration_run(
+            orch_run_id,
+            status="completed",
+            completed_at=db._utcnow(),
+            duration_seconds=time.time() - start,
+        )
+        return result
+
+    except Exception as exc:
+        db.update_orchestration_run(
+            orch_run_id,
+            status="failed",
+            total_errors=1,
+            completed_at=db._utcnow(),
+            duration_seconds=time.time() - start,
+        )
+        raise
+
+
+# ══════════════════════════════════════════════════════
+# Flow 6: Neo4j Reconciliation
+# ══════════════════════════════════════════════════════
+
+@flow(name="neo4j_reconciliation", retries=0)
+def neo4j_reconciliation_flow(
+    trigger_type: str = "scheduled",
+    triggered_by: Optional[str] = None,
+    config: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Run reconciliation between Supabase Gold and Neo4j.
+
+    Detects drift via count/checksum comparison and proposes
+    LLM-guided backfills.
+    """
+    orch_run = db.create_orchestration_run(
+        flow_name="neo4j_reconciliation",
+        trigger_type=trigger_type,
+        triggered_by=triggered_by,
+        flow_type="batch",
+        layers=["gold_to_neo4j"],
+        config=config,
+    )
+    orch_run_id = orch_run["id"]
+    start = time.time()
+
+    try:
+        result = run_gold_to_neo4j_reconciliation(
+            orchestration_run_id=orch_run_id,
+            trigger_type=trigger_type,
+            triggered_by=triggered_by,
+            config=config,
+        )
+        db.update_orchestration_run(
+            orch_run_id,
+            status="completed",
+            completed_at=db._utcnow(),
+            duration_seconds=time.time() - start,
+        )
+        return result
+
+    except Exception as exc:
+        db.update_orchestration_run(
+            orch_run_id,
+            status="failed",
+            total_errors=1,
+            completed_at=db._utcnow(),
+            duration_seconds=time.time() - start,
+        )
+        raise
+
+
+# ══════════════════════════════════════════════════════
+# Flow 7: Neo4j Realtime Worker
+# ══════════════════════════════════════════════════════
+
+@flow(name="neo4j_realtime_worker", retries=1, retry_delay_seconds=60)
+def neo4j_realtime_worker_flow(
+    trigger_type: str = "manual",
+    triggered_by: Optional[str] = None,
+    config: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Start the customer_realtime outbox poller.
+
+    This is a persistent / long-running flow that polls the Gold
+    outbox table and pushes B2C events to Neo4j in near-real-time.
+    """
+    orch_run = db.create_orchestration_run(
+        flow_name="neo4j_realtime_worker",
+        trigger_type=trigger_type,
+        triggered_by=triggered_by,
+        flow_type="realtime",
+        layers=["gold_to_neo4j"],
+        config=config,
+    )
+    orch_run_id = orch_run["id"]
+    start = time.time()
+
+    try:
+        result = run_gold_to_neo4j_realtime(
+            orchestration_run_id=orch_run_id,
+            trigger_type=trigger_type,
+            triggered_by=triggered_by,
+            config=config,
+        )
+        db.update_orchestration_run(
+            orch_run_id,
+            status="completed",
+            completed_at=db._utcnow(),
+            duration_seconds=time.time() - start,
+        )
+        return result
+
+    except Exception as exc:
+        db.update_orchestration_run(
+            orch_run_id,
+            status="failed",
+            total_errors=1,
+            completed_at=db._utcnow(),
+            duration_seconds=time.time() - start,
+        )
+        raise
+
+
+# ══════════════════════════════════════════════════════
+# Flow Registry (for dispatching by name)
+# ══════════════════════════════════════════════════════
+
+FLOW_REGISTRY = {
+    "full_ingestion": full_ingestion_flow,
+    "bronze_to_gold": bronze_to_gold_flow,
+    "single_layer": single_layer_flow,
+    "realtime_event": realtime_event_flow,
+    "neo4j_batch_sync": neo4j_batch_sync_flow,
+    "neo4j_reconciliation": neo4j_reconciliation_flow,
+    "neo4j_realtime_worker": neo4j_realtime_worker_flow,
+}
