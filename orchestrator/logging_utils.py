@@ -218,3 +218,42 @@ class RunSummariser:
             "📊 DQ Summary for %s: %d total, %d pass, %d fail, avg=%.1f",
             target_table, total, pass_count, fail_count, avg_score or 0,
         )
+
+
+# ══════════════════════════════════════════════════════
+# Per-Source Scoped Logging for Parallel Runs
+# ══════════════════════════════════════════════════════
+
+class _SourceLogFilter(logging.Filter):
+    """Injects job_id and source_name into every log record."""
+
+    def __init__(self, job_id: str, source_name: str):
+        super().__init__()
+        self.job_id = job_id
+        self.source_name = source_name
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.msg = f"[job_id={self.job_id} source={self.source_name}] {record.msg}"
+        return True
+
+
+class SourceScopedLogger:
+    """
+    Context manager that scopes all log output to a specific source job.
+
+    Usage::
+
+        with SourceScopedLogger("abc123", "usda"):
+            logger.info("Processing records")
+            # Outputs: [job_id=abc123 source=usda] Processing records
+    """
+
+    def __init__(self, job_id: str, source_name: str):
+        self.filter = _SourceLogFilter(job_id, source_name)
+
+    def __enter__(self):
+        logging.getLogger().addFilter(self.filter)
+        return self
+
+    def __exit__(self, *exc):
+        logging.getLogger().removeFilter(self.filter)

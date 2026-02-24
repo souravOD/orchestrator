@@ -28,7 +28,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from . import db
 from .config import settings
-from .models import RunSummaryResponse, TriggerRequest
+from .models import BatchTriggerRequest, RunSummaryResponse, TriggerRequest
 from .triggers import handle_webhook_event
 
 logger = logging.getLogger(__name__)
@@ -209,6 +209,88 @@ async def trigger_flow(request: TriggerRequest):
 
     except Exception as exc:
         logger.error("API trigger failed: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+# ══════════════════════════════════════════════════════
+# Batch Trigger Endpoint (Multi-Source Parallel)
+# ══════════════════════════════════════════════════════
+
+@app.post("/api/trigger-batch")
+async def trigger_batch(request: BatchTriggerRequest):
+    """
+    Trigger parallel ingestion for multiple data sources.
+
+    Returns immediately with a ``batch_id`` and per-source ``run_id``s.
+    Sources are processed in parallel with a concurrency limit
+    (see ``PARALLEL_MAX_CONCURRENCY`` env var, default 2).
+    """
+    from .flows import multi_source_ingestion_flow
+
+    # Pre-create an orchestration_run for each source so we can return run IDs now
+    source_configs = []
+    pre_created_run_ids: Dict[str, str] = {}
+    source_results = []
+
+    config = {
+        "batch_size": request.batch_size,
+        "incremental": request.incremental,
+        "dry_run": request.dry_run,
+    }
+
+    try:
+        for src in request.sources:
+            orch_run = db.create_orchestration_run(
+                flow_name=request.flow_name,
+                trigger_type="api",
+                triggered_by="api:/api/trigger-batch",
+                layers=["prebronze_to_bronze", "bronze_to_silver",
+                        "silver_to_gold", "gold_to_neo4j"],
+                config=config,
+                source_name=src.source_name,
+                vendor_id=src.vendor_id,
+            )
+            run_id = orch_run["id"]
+            pre_created_run_ids[src.source_name] = run_id
+            source_configs.append(src.model_dump())
+            source_results.append({
+                "source_name": src.source_name,
+                "run_id": str(run_id),
+                "status": "queued",
+            })
+
+        # Generate batch ID
+        import uuid
+        batch_id = str(uuid.uuid4())[:12]
+
+        # Dispatch to background — API returns immediately
+        loop = asyncio.get_event_loop()
+        loop.run_in_executor(
+            None,
+            lambda: multi_source_ingestion_flow(
+                sources=source_configs,
+                trigger_type="api",
+                triggered_by="api:/api/trigger-batch",
+                config=config,
+                pre_created_run_ids=pre_created_run_ids,
+            ),
+        )
+
+        logger.info(
+            "🚀 Batch %s dispatched: %d sources (concurrency=%d)",
+            batch_id, len(request.sources), settings.parallel_max_concurrency,
+        )
+
+        return {
+            "status": "accepted",
+            "batch_id": batch_id,
+            "sources": source_results,
+            "concurrency_limit": settings.parallel_max_concurrency,
+            "queue_depth": len(request.sources),
+        }
+
+    except Exception as exc:
+        logger.error("Batch trigger failed: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc))
 
 

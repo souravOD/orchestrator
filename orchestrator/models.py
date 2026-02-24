@@ -231,6 +231,33 @@ class TriggerRequest(BaseModel):
     dry_run: bool = False
 
 
+class BatchSourceConfig(BaseModel):
+    """Configuration for a single source in a batch trigger."""
+    source_name: str = Field(..., min_length=1)
+    input_path: Optional[str] = None
+    storage_bucket: Optional[str] = None
+    storage_path: Optional[str] = None
+    vendor_id: Optional[str] = None
+
+
+class BatchTriggerRequest(BaseModel):
+    """Request body for triggering parallel ingestion of multiple sources."""
+    flow_name: str = "full_ingestion"
+    sources: List[BatchSourceConfig] = Field(..., min_length=1, max_length=20)
+    batch_size: int = 100
+    incremental: bool = True
+    dry_run: bool = False
+
+
+class BatchTriggerResponse(BaseModel):
+    """Response body from batch trigger endpoint."""
+    status: str = "accepted"
+    batch_id: str
+    sources: List[Dict[str, Any]]
+    concurrency_limit: int
+    queue_depth: int
+
+
 class IngestionInput(BaseModel):
     """Validated input for full_ingestion and single_layer flows."""
     source_name: str = Field(..., min_length=1, description="Vendor/data source name")

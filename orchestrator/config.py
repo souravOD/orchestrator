@@ -72,6 +72,11 @@ class OrchestratorSettings(BaseSettings):
     # ── Gold-to-Neo4j pipeline path ──────────────────
     neo4j_pipeline_dir: str = "Gold-to-Neo4j_with_agentic_checks/Gold-to-Neo4j_services"
 
+    # ── Parallel Ingestion ───────────────────────────
+    parallel_max_concurrency: int = 2               # max sources running simultaneously
+    parallel_work_dir: str = "/tmp/orchestrator-work"  # base dir for per-source isolation
+    parallel_queue_warn_threshold: int = 10          # alert if backlog exceeds this
+
     model_config = {
         "env_file": ".env",
         "env_file_encoding": "utf-8",

@@ -20,7 +20,8 @@ class TestFlowRegistry:
         assert "bronze_to_gold" in FLOW_REGISTRY
         assert "single_layer" in FLOW_REGISTRY
         assert "realtime_event" in FLOW_REGISTRY
-        assert len(FLOW_REGISTRY) == 7
+        assert "multi_source_ingestion" in FLOW_REGISTRY
+        assert len(FLOW_REGISTRY) == 8
 
     def test_all_entries_are_callable(self):
         for name, flow_fn in FLOW_REGISTRY.items():

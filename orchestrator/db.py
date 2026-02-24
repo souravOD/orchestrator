@@ -507,6 +507,29 @@ def has_running_flow(flow_name: str, source_name: Optional[str] = None) -> bool:
     return len(result.data or []) > 0
 
 
+def update_orchestration_run_metadata(
+    run_id: str | UUID,
+    metadata: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Merge instrumentation metadata into the orchestration_run's metadata JSONB.
+
+    This is used by the parallel runner to store layer_timings, queue_depth,
+    job_id, and other per-source operational data.
+    """
+    # Fetch current metadata and merge
+    existing = get_orchestration_run(str(run_id))
+    current_meta = (existing or {}).get("metadata", {}) or {}
+    current_meta.update(metadata)
+
+    result = (
+        _orch_table("orchestration_runs")
+        .update({"metadata": current_meta})
+        .eq("id", str(run_id))
+        .execute()
+    )
+    return (result.data or [{}])[0]
+
+
 # ══════════════════════════════════════════════════════
 # Tool Metrics & LLM Usage
 # ══════════════════════════════════════════════════════

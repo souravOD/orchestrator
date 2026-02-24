@@ -152,6 +152,7 @@ def full_ingestion_flow(
         logger.info("🔄 Orchestration run %s — full_ingestion started", orch_run_id)
 
     results: Dict[str, Any] = {}
+    layer_timings: Dict[str, float] = {}
     total_written = 0
     total_dq = 0
     errors = 0
@@ -166,6 +167,7 @@ def full_ingestion_flow(
     try:
         # ── Layer 1: PreBronze → Bronze ──
         if "prebronze_to_bronze" not in completed_layers:
+            layer_start = time.time()
             bronze_result = run_prebronze_to_bronze(
                 orchestration_run_id=orch_run_id,
                 source_name=source_name,
@@ -174,6 +176,7 @@ def full_ingestion_flow(
                 triggered_by=triggered_by,
                 config=cfg,
             )
+            layer_timings["prebronze_to_bronze"] = round(time.time() - layer_start, 2)
             results["prebronze_to_bronze"] = bronze_result
             total_written += bronze_result.get("records_loaded", 0)
         else:
@@ -181,12 +184,14 @@ def full_ingestion_flow(
 
         # ── Layer 2: Bronze → Silver ──
         if "bronze_to_silver" not in completed_layers:
+            layer_start = time.time()
             silver_result = run_bronze_to_silver(
                 orchestration_run_id=orch_run_id,
                 trigger_type="upstream_complete",
                 triggered_by="prebronze_to_bronze",
                 config=cfg,
             )
+            layer_timings["bronze_to_silver"] = round(time.time() - layer_start, 2)
             results["bronze_to_silver"] = silver_result
             total_written += silver_result.get("total_written", 0)
             total_dq += silver_result.get("total_dq_issues", 0)
@@ -195,12 +200,14 @@ def full_ingestion_flow(
 
         # ── Layer 3: Silver → Gold ──
         if "silver_to_gold" not in completed_layers:
+            layer_start = time.time()
             gold_result = run_silver_to_gold(
                 orchestration_run_id=orch_run_id,
                 trigger_type="upstream_complete",
                 triggered_by="bronze_to_silver",
                 config=cfg,
             )
+            layer_timings["silver_to_gold"] = round(time.time() - layer_start, 2)
             results["silver_to_gold"] = gold_result
             total_written += gold_result.get("total_written", 0)
         else:
@@ -208,6 +215,7 @@ def full_ingestion_flow(
 
         # ── Layer 4: Gold → Neo4j (best-effort) ──
         if "gold_to_neo4j" not in completed_layers:
+            layer_start = time.time()
             try:
                 neo4j_result = run_gold_to_neo4j_batch(
                     orchestration_run_id=orch_run_id,
@@ -222,6 +230,8 @@ def full_ingestion_flow(
                 # Neo4j sync failure should not fail the overall ingestion
                 logger.warning("⚠️ Gold→Neo4j sync failed (non-fatal): %s", neo4j_exc)
                 results["gold_to_neo4j"] = {"status": "failed", "error": str(neo4j_exc)}
+            finally:
+                layer_timings["gold_to_neo4j"] = round(time.time() - layer_start, 2)
         else:
             logger.info("⏭️ Skipping gold_to_neo4j (already completed)")
 
@@ -235,12 +245,26 @@ def full_ingestion_flow(
             completed_at=db._utcnow(),
             duration_seconds=duration,
         )
-        logger.info("✅ Full ingestion completed in %.1fs. Total written=%d", duration, total_written)
+
+        # Store layer timing instrumentation
+        try:
+            db.update_orchestration_run_metadata(orch_run_id, {
+                "layer_timings": layer_timings,
+                "end_to_end_seconds": duration,
+            })
+        except Exception:
+            logger.debug("Failed to store layer timings (non-fatal)")
+
+        logger.info(
+            "✅ Full ingestion completed in %.1fs. Total written=%d | Layer timings: %s",
+            duration, total_written, layer_timings,
+        )
 
         _send_success_notification(
             "full_ingestion", orch_run_id, duration,
             total_written=total_written, total_dq=total_dq,
         )
+        results["_layer_timings"] = layer_timings
         return results
 
     except Exception as exc:
@@ -695,6 +719,74 @@ def neo4j_realtime_worker_flow(
 
 
 # ══════════════════════════════════════════════════════
+# Flow 8: Multi-Source Parallel Ingestion
+# ══════════════════════════════════════════════════════
+
+@flow(
+    name="multi_source_ingestion",
+    description="Parallel ingestion of multiple data sources with concurrency limiting",
+    log_prints=True,
+)
+def multi_source_ingestion_flow(
+    sources: List[Dict[str, Any]],
+    trigger_type: str = "api",
+    triggered_by: Optional[str] = None,
+    config: Optional[Dict[str, Any]] = None,
+    pre_created_run_ids: Optional[Dict[str, str]] = None,
+) -> Dict[str, Any]:
+    """
+    Run multiple data sources through the ingestion pipeline in parallel.
+
+    Uses ``ParallelSourceRunner`` with an ``asyncio.Semaphore`` to limit
+    concurrency (default: 2 sources at a time).
+
+    Parameters
+    ----------
+    sources
+        List of source configs, each with at least ``source_name``.
+    pre_created_run_ids
+        Optional mapping of source_name → pre-created orch_run_id
+        (used by the API layer to return run IDs immediately).
+    """
+    import asyncio
+    from .parallel import ParallelSourceRunner
+
+    runner = ParallelSourceRunner()
+    cfg = config or {}
+
+    logger.info(
+        "🚀 Multi-source ingestion: %d sources, concurrency=%d",
+        len(sources), runner.max_concurrency,
+    )
+
+    # Run the async parallel runner in the event loop
+    loop = asyncio.new_event_loop()
+    try:
+        batch_result = loop.run_until_complete(
+            runner.run_sources(
+                sources=sources,
+                flow_name="full_ingestion",
+                trigger_type=trigger_type,
+                triggered_by=triggered_by or "multi_source_ingestion",
+                config=cfg,
+                pre_created_run_ids=pre_created_run_ids,
+            )
+        )
+    finally:
+        loop.close()
+
+    return {
+        "batch_id": batch_result.batch_id,
+        "total_sources": batch_result.total_sources,
+        "completed": batch_result.completed,
+        "failed": batch_result.failed,
+        "total_duration_seconds": batch_result.total_duration_seconds,
+        "concurrency_limit": batch_result.concurrency_limit,
+        "source_results": batch_result.source_results,
+    }
+
+
+# ══════════════════════════════════════════════════════
 # Flow Registry (for dispatching by name)
 # ══════════════════════════════════════════════════════
 
@@ -706,4 +798,5 @@ FLOW_REGISTRY = {
     "neo4j_batch_sync": neo4j_batch_sync_flow,
     "neo4j_reconciliation": neo4j_reconciliation_flow,
     "neo4j_realtime_worker": neo4j_realtime_worker_flow,
+    "multi_source_ingestion": multi_source_ingestion_flow,
 }
