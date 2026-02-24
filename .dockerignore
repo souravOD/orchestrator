@@ -1,0 +1,39 @@
+# ── Git ──────────────────────────────────
+.git/
+.gitignore
+
+# ── Python ───────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+*.egg
+
+# ── Environment (secrets) ────────────────
+.env
+.env.local
+.env.*.local
+
+# ── Node / Dashboard ─────────────────────
+dashboard/node_modules/
+dashboard/.next/
+dashboard/out/
+
+# ── IDE ──────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── OS ───────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Docs & SQL (not needed at runtime) ───
+docs/
+sql/
+*.md
+*.log
