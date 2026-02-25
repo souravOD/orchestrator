@@ -8,9 +8,18 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends git curl && \
     rm -rf /var/lib/apt/lists/*
 
-# Copy and install Python deps
+# Copy and install orchestrator deps (no [pipelines] extra needed)
 COPY pyproject.toml ./
-RUN pip install --no-cache-dir -e ".[pipelines]" 2>/dev/null || pip install --no-cache-dir -e .
+RUN pip install --no-cache-dir -e .
+
+# Install pipeline packages so `python -m <module>` works in subprocess mode.
+# Pin to specific tags/commits in production for reproducibility.
+# TODO: Replace these placeholder URLs with your actual repository URLs.
+RUN pip install --no-cache-dir \
+    "prebronze-to-bronze @ git+https://github.com/your-org/prebronze-to-bronze.git@main" \
+    "bronze-to-silver @ git+https://github.com/your-org/bronze-to-silver.git@main" \
+    "silver-to-gold @ git+https://github.com/your-org/silver-to-gold.git@main" \
+    "nutrition-usda-fetcher @ git+https://github.com/your-org/nutrition-usda-fetcher.git@main"
 
 # Copy application code
 COPY . .

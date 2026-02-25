@@ -40,12 +40,10 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
 ]
-pipelines = [
-    # Install the actual LangGraph pipelines for full execution
-    "langgraph>=0.2",
-    "langchain-openai>=0.1",
-    "pandas>=2.0",
-]
+# NOTE: [pipelines] extra removed — orchestrator runs pipelines as
+# subprocesses and no longer imports their code directly.  Pipeline
+# packages are installed separately in the Docker image so that
+# `python -m pipeline_module` works.
 neo4j = [
     # Gold-to-Neo4j pipeline driver
     "neo4j>=5.0",

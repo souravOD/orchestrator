@@ -38,6 +38,7 @@ from .pipelines import (
     run_gold_to_neo4j_reconciliation,
     run_prebronze_to_bronze,
     run_silver_to_gold,
+    run_usda_nutrition_fetch,
 )
 
 logger = logging.getLogger(__name__)
@@ -143,7 +144,7 @@ def full_ingestion_flow(
             flow_name="full_ingestion",
             trigger_type=trigger_type,
             triggered_by=triggered_by,
-            layers=["prebronze_to_bronze", "bronze_to_silver", "silver_to_gold", "gold_to_neo4j"],
+            layers=["prebronze_to_bronze", "usda_nutrition_fetch", "bronze_to_silver", "silver_to_gold", "gold_to_neo4j"],
             config=cfg,
             source_name=source_name,
             vendor_id=vendor_id,
@@ -181,6 +182,34 @@ def full_ingestion_flow(
             total_written += bronze_result.get("records_loaded", 0)
         else:
             logger.info("⏭️ Skipping prebronze_to_bronze (already completed)")
+            bronze_result = {}  # Needed for detected_table check below
+
+        # ── Layer 1.5: USDA Nutrition Fetch (conditional) ──
+        if "usda_nutrition_fetch" not in completed_layers:
+            # Only trigger if PreBronze wrote to raw_recipes
+            detected_table = bronze_result.get("detected_table", "") if bronze_result else ""
+            if detected_table == "raw_recipes" or cfg.get("force_usda_fetch"):
+                layer_start = time.time()
+                try:
+                    usda_result = run_usda_nutrition_fetch(
+                        orchestration_run_id=orch_run_id,
+                        trigger_type="upstream_complete",
+                        triggered_by="prebronze_to_bronze",
+                        config=cfg,
+                    )
+                    layer_timings["usda_nutrition_fetch"] = round(time.time() - layer_start, 2)
+                    results["usda_nutrition_fetch"] = usda_result
+                    total_written += usda_result.get("inserted", 0)
+                    logger.info("✅ USDA Nutrition Fetch completed")
+                except Exception as usda_exc:
+                    # USDA fetch failure should not fail the overall ingestion
+                    logger.warning("⚠️ USDA Nutrition Fetch failed (non-fatal): %s", usda_exc)
+                    results["usda_nutrition_fetch"] = {"status": "failed", "error": str(usda_exc)}
+                    layer_timings["usda_nutrition_fetch"] = round(time.time() - layer_start, 2)
+            else:
+                logger.info("⏭️ Skipping USDA fetch (detected_table=%s, not raw_recipes)", detected_table)
+        else:
+            logger.info("⏭️ Skipping usda_nutrition_fetch (already completed)")
 
         # ── Layer 2: Bronze → Silver ──
         if "bronze_to_silver" not in completed_layers:
@@ -367,6 +396,7 @@ def bronze_to_gold_flow(
 
 LAYER_TASKS = {
     "prebronze_to_bronze": run_prebronze_to_bronze,
+    "usda_nutrition_fetch": run_usda_nutrition_fetch,
     "bronze_to_silver": run_bronze_to_silver,
     "silver_to_gold": run_silver_to_gold,
 }

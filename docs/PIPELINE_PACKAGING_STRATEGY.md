@@ -1,7 +1,7 @@
 # Pipeline Packaging Strategy: Installable Python Packages
 
 > **Document for:** Pipeline development teams (PreBronze→Bronze, Bronze→Silver, Silver→Gold, Gold→Neo4j)
-> **Purpose:** Enable the orchestrator to import your pipeline as a standard Python package instead of relying on filesystem path hacking
+> **Purpose:** Enable the orchestrator to run your pipeline as a subprocess (`python -m your_pipeline`) instead of relying on filesystem path hacking and fragile in-process imports
 
 ---
 
@@ -45,25 +45,45 @@ This approach has **critical limitations**:
 | **No reproducible builds** | Two developers with slightly different directory layouts get different behavior |
 | **Impossible to test in CI** | GitHub Actions / CI runners won't have the same directory structure |
 
-### The Solution: Installable Python Packages
+### The Solution: Installable Python Packages + Subprocess Execution
 
 By adding a single `pyproject.toml` file to each pipeline repo, they become standard Python packages that can be:
+
 - **Installed** via `pip install` (locally, from git, or from a registry)
 - **Versioned** with semantic versioning
 - **Tested** independently in CI
 - **Deployed** into any Docker container
+- **Executed** as subprocesses with full process isolation
 
-The orchestrator import changes from:
+The orchestrator execution changes from:
+
 ```python
-# ❌ Before: fragile filesystem hack
+# ❌ Before: fragile filesystem hack, in-process import
 _ensure_pipeline_on_path("prebronze-to-bronze")
 from prebronze.orchestrator import run_sequential
+result = run_sequential(state)   # runs in orchestrator's process
 ```
+
 to:
+
 ```python
-# ✅ After: standard Python import (works everywhere)
-from prebronze.orchestrator import run_sequential
+# ✅ After: subprocess execution (process isolation, crash safety)
+import subprocess, sys
+proc = subprocess.run(
+    [sys.executable, "-m", "prebronze.orchestrator",
+     "--input", "/tmp/data.json", "--source-name", "walmart"],
+    capture_output=True, text=True, timeout=600,
+)
+# Pipeline runs in its own process — orchestrator stays alive even if it crashes
 ```
+
+> [!TIP]
+> **Why subprocess instead of import?**
+>
+> - **Crash isolation:** If a pipeline segfaults or runs out of memory, the orchestrator stays alive
+> - **Dependency isolation:** Pipeline deps never conflict with orchestrator deps
+> - **Independent scaling:** Each pipeline can have its own resource limits
+> - **Same code locally and in production:** No divergence between environments
 
 ---
 
@@ -118,13 +138,13 @@ packages = ["prebronze"]
 > [!IMPORTANT]
 > The `packages = ["prebronze"]` line under `[tool.hatch.build.targets.wheel]` must point to the **directory name** that contains your Python modules — the one with `__init__.py`. This is the name used in `import prebronze`.
 
-**What the orchestrator imports from your package:**
-```python
-from prebronze.orchestrator import run_sequential
-from prebronze.state import OrchestratorState
+**What the orchestrator runs as a subprocess:**
+
+```bash
+python -m prebronze.orchestrator --input /tmp/data.json --source-name walmart --ingestion-run-id <uuid>
 ```
 
-Make sure these modules exist and are importable after installation.
+Make sure the `main()` function in `prebronze/orchestrator.py` and the `if __name__ == "__main__"` block exist and work.
 
 ---
 
@@ -166,9 +186,10 @@ dev = [
 packages = ["bronze_to_silver"]
 ```
 
-**What the orchestrator imports from your package:**
-```python
-from bronze_to_silver.auto_orchestrator import transform_all_tables
+**What the orchestrator runs as a subprocess:**
+
+```bash
+python -m bronze_to_silver.auto_orchestrator --batch-size 100 --incremental
 ```
 
 ---
@@ -208,9 +229,10 @@ dev = [
 packages = ["silver_to_gold"]
 ```
 
-**What the orchestrator imports from your package:**
-```python
-from silver_to_gold.auto_orchestrator import transform_all_tables
+**What the orchestrator runs as a subprocess:**
+
+```bash
+python -m silver_to_gold.auto_orchestrator --batch-size 100 --incremental
 ```
 
 ---
@@ -242,6 +264,7 @@ your-pipeline-repo/
 
 > [!CAUTION]
 > **Critical:** Your importable package directory **must** have an `__init__.py` file. Without it, Python won't recognize it as a package and imports will fail. If it doesn't exist, create an empty one:
+>
 > ```bash
 > touch your_package_name/__init__.py
 > ```
@@ -262,47 +285,78 @@ python -c "from prebronze.orchestrator import run_sequential; print('✅ Import 
 ```
 
 If the import fails, check:
+
 1. Does the package directory name match what's in `packages = [...]`?
 2. Does the package directory have `__init__.py`?
 3. Are all dependencies listed in `pyproject.toml`?
 
 ---
 
-## How the Orchestrator Will Use Your Packages
+## How the Orchestrator Uses Your Packages
+
+### Execution Model: Subprocess
+
+The orchestrator runs each pipeline as a **separate subprocess** via `python -m <module>`.
+Pipelines are installed as Python packages (via `pip install`) so the module path resolves.
+The orchestrator **never imports your code directly** — it only calls your CLI.
+
+```python
+# What the orchestrator does internally (simplified)
+import subprocess, sys
+
+proc = subprocess.run(
+    [sys.executable, "-m", "bronze_to_silver.auto_orchestrator",
+     "--batch-size", "100", "--incremental"],
+    capture_output=True, text=True,
+    timeout=600,
+    env=os.environ,  # passes SUPABASE_URL, OPENAI_API_KEY, etc.
+)
+
+if proc.returncode != 0:
+    raise RuntimeError(f"Pipeline failed: {proc.stderr}")
+```
 
 ### During Local Development
 
-Developers clone all repos side by side and install them in editable mode:
+Use the `local-dev/` setup scripts to install everything:
 
 ```bash
-# One-time setup
-cd "Orchestration Pipeline"
-pip install -e "./prebronze-to-bronze 1/prebronze-to-bronze"
-pip install -e "./bronze-to-silver 1/bronze-to-silver"
-pip install -e "./silver-to-gold 1/silver-to-gold"
-pip install -e "./orchestrator"
+# One-time setup (Windows)
+cd "Orchestration Pipeline/local-dev"
+.\setup_local.ps1
+
+# One-time setup (Unix/macOS)
+cd "Orchestration Pipeline/local-dev"
+bash setup_local.sh
 ```
 
-With editable installs, any code changes in your pipeline repo are **immediately visible** to the orchestrator — no reinstall needed.
+This creates a venv, installs all pipeline deps, and does editable installs.
+Then you run the **actual orchestrator** locally — same subprocess code as production:
+
+```bash
+python -m orchestrator serve
+```
+
+To debug a specific pipeline in isolation, run its CLI directly:
+
+```bash
+python -m bronze_to_silver.auto_orchestrator --batch-size 5 --log-level DEBUG
+```
 
 ### During Docker / Coolify Deployment
 
-The orchestrator's Dockerfile will install your pipelines from **git URLs** (or a private package registry):
+The orchestrator's Dockerfile installs your pipeline packages from git URLs:
 
 ```dockerfile
-FROM python:3.12-slim
+# Install orchestrator (no pipeline deps needed in its own package)
+COPY pyproject.toml ./
+RUN pip install --no-cache-dir -e .
 
-# Install pipeline packages from git
-RUN pip install \
+# Install pipeline packages so `python -m <module>` works
+RUN pip install --no-cache-dir \
     "prebronze-to-bronze @ git+https://github.com/your-org/prebronze-to-bronze.git@v1.0.0" \
     "bronze-to-silver @ git+https://github.com/your-org/bronze-to-silver.git@v1.0.0" \
     "silver-to-gold @ git+https://github.com/your-org/silver-to-gold.git@v1.0.0"
-
-# Install the orchestrator itself
-COPY orchestrator/ /app/orchestrator/
-RUN pip install /app/orchestrator
-
-CMD ["uvicorn", "orchestrator.api:app", "--host", "0.0.0.0", "--port", "8100"]
 ```
 
 ### In CI/CD Pipelines
@@ -359,84 +413,62 @@ git push origin main --tags
 
 ### Version Pinning in the Orchestrator
 
-The orchestrator will pin pipeline versions to ensure stability:
+The orchestrator Dockerfile pins pipeline versions for stability:
 
-```toml
-# orchestrator/pyproject.toml
-[project.optional-dependencies]
-pipelines = [
-    "prebronze-to-bronze>=1.0.0,<2.0.0",   # compatible with any 1.x
-    "bronze-to-silver>=1.0.0,<2.0.0",
-    "silver-to-gold>=1.0.0,<2.0.0",
-]
-```
-
-Or for exact pinning in production:
-```toml
-pipelines = [
-    "prebronze-to-bronze==1.2.3",
-    "bronze-to-silver==1.1.0",
-    "silver-to-gold==1.0.5",
-]
+```dockerfile
+# orchestrator/Dockerfile — pin to specific git tags
+RUN pip install --no-cache-dir \
+    "prebronze-to-bronze @ git+https://github.com/your-org/prebronze-to-bronze.git@v1.2.3" \
+    "bronze-to-silver @ git+https://github.com/your-org/bronze-to-silver.git@v1.1.0" \
+    "silver-to-gold @ git+https://github.com/your-org/silver-to-gold.git@v1.0.5"
 ```
 
 ---
 
-## The Public API Contract
+## The CLI Contract (Public API)
 
-Each pipeline must expose specific functions that the orchestrator calls. These are your **public API** — changing them is a **breaking change** (MAJOR version bump).
+Each pipeline must expose a `main()` CLI entry point that the orchestrator calls via subprocess. These are your **public API** — changing them is a **breaking change** (MAJOR version bump).
 
-### Required Exports
+### Required CLI Entry Points
 
-| Pipeline | Module Path | Function | Signature |
-|----------|-------------|----------|-----------|
-| PreBronze→Bronze | `prebronze.orchestrator` | `run_sequential` | `(state: dict) → dict` |
-| PreBronze→Bronze | `prebronze.state` | `OrchestratorState` | TypedDict / dataclass |
-| Bronze→Silver | `bronze_to_silver.auto_orchestrator` | `transform_all_tables` | `() → dict` |
-| Silver→Gold | `silver_to_gold.auto_orchestrator` | `transform_all_tables` | `() → dict` |
+| Pipeline | Module Path | CLI Command | Key Arguments |
+|----------|-------------|-------------|---------------|
+| PreBronze→Bronze | `prebronze.orchestrator` | `python -m prebronze.orchestrator` | `--input <file>`, `--source-name <name>`, `--ingestion-run-id <uuid>` |
+| Bronze→Silver | `bronze_to_silver.auto_orchestrator` | `python -m bronze_to_silver.auto_orchestrator` | `--batch-size <n>`, `--incremental`, `--dry-run` |
+| Silver→Gold | `silver_to_gold.auto_orchestrator` | `python -m silver_to_gold.auto_orchestrator` | `--batch-size <n>`, `--incremental`, `--dry-run` |
 
-### Return Value Contract
+### CLI Requirements
 
-The orchestrator reads specific keys from the return dict. Your function **must** include these:
+Each pipeline's entry module **must** have:
 
-**PreBronze→Bronze** `run_sequential()` must return:
+1. A `main()` function that parses CLI args via `argparse`
+2. An `if __name__ == "__main__": main()` block
+3. Exit code `0` on success, non-zero on failure
+4. All output goes to stdout/stderr (logs, progress, errors)
+
 ```python
-{
-    "records_loaded": int,           # number of records written to bronze
-    "validation_errors_count": int,  # number of records that failed validation
-    "validation_errors": list,       # list of error details
-}
+# Example: your_pipeline/auto_orchestrator.py
+def main(argv=None):
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--batch-size", type=int, default=100)
+    parser.add_argument("--incremental", action="store_true")
+    args = parser.parse_args(argv)
+
+    try:
+        result = transform_all_tables(batch_size=args.batch_size, ...)
+        # Optionally print JSON summary on last line (orchestrator can parse it)
+        print(json.dumps({"total_records_written": result["total_written"]}))
+    except Exception as e:
+        logger.error(f"Pipeline failed: {e}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
 ```
 
-**Bronze→Silver / Silver→Gold** `transform_all_tables()` must return:
-```python
-{
-    "total_processed": int,     # total records processed
-    "total_written": int,       # total records written
-    "total_failed": int,        # total records that failed
-    "total_dq_issues": int,     # data quality issues found (bronze→silver only)
-}
-```
+### Environment Variables (Not CLI Args)
 
-> [!WARNING]
-> **Do not rename or remove these keys** without coordinating with the orchestrator team. Adding new keys is always safe (MINOR version bump). Removing or renaming keys is a breaking change (MAJOR version bump).
-
----
-
-## Environment Variables
-
-Your pipeline currently reads environment variables (e.g., `SUPABASE_URL`, `OPENAI_API_KEY`) via `python-dotenv` and `.env` files. When running under the orchestrator, these variables are set by the **orchestrator's `.env`** file, not yours.
-
-### What This Means for You
-
-1. **Keep using `os.environ` / `python-dotenv`** — no code change needed
-2. **Do NOT hardcode credentials** in your package code
-3. **Document all required env vars** in your `README.md`
-4. The orchestrator's deployment will set all env vars via Coolify's environment configuration
-
-### Required Environment Variables (Per Pipeline)
-
-Document these in your README so the orchestrator team knows what to configure:
+Credentials and connection strings are passed via **environment variables**, NOT CLI args. The orchestrator's environment is automatically inherited by subprocesses.
 
 | Variable | Used By | Description |
 |----------|---------|-------------|
@@ -444,6 +476,9 @@ Document these in your README so the orchestrator team knows what to configure:
 | `SUPABASE_SERVICE_ROLE_KEY` | All pipelines | Service role key for DB access |
 | `OPENAI_API_KEY` | All pipelines | OpenAI API key for LLM steps |
 | `OPENAI_MODEL_NAME` | All pipelines | Model to use (default: `gpt-4o-mini`) |
+
+> [!WARNING]
+> **Do not rename or remove CLI arguments** without coordinating with the orchestrator team. Adding new optional args is always safe (MINOR version bump). Removing or renaming args is a breaking change (MAJOR version bump).
 
 ---
 
@@ -457,20 +492,24 @@ Use this checklist when converting your pipeline to an installable package:
 - [ ] Verify `__init__.py` exists in your main package directory
 - [ ] Verify `packages = ["your_package"]` matches your directory name
 - [ ] Copy dependencies from `requirements.txt` into `pyproject.toml` `dependencies`
+- [ ] Verify your `main()` CLI entry point works: `python -m your_package.auto_orchestrator --help`
+- [ ] Verify `if __name__ == "__main__": main()` exists in your entry module
 - [ ] Test: `pip install -e .` succeeds without errors
-- [ ] Test: The orchestrator's expected imports work (see "Required Exports" table)
-- [ ] Test: `pip install .` (non-editable) also works
+- [ ] Test: `python -m your_package.auto_orchestrator --dry-run` runs correctly
 - [ ] Tag release: `git tag v1.0.0 && git push --tags`
+- [ ] Document all required CLI arguments in `README.md`
 - [ ] Document all required environment variables in `README.md`
 - [ ] Keep `requirements.txt` for backward compatibility (it can stay)
 
-### Orchestrator Team Checklist (After All Pipelines Are Packaged)
+### Orchestrator Team Checklist (Done ✅)
 
-- [ ] Remove `_ensure_pipeline_on_path()` function from `pipelines.py`
-- [ ] Remove all `_ensure_pipeline_on_path(...)` calls before imports
-- [ ] Add pipeline packages to orchestrator's `pyproject.toml` as dependencies
-- [ ] Update Dockerfile to `pip install` pipelines from git or registry
-- [ ] Verify all integration tests pass with installed packages
+- [x] Remove `_ensure_pipeline_on_path()` function from `pipelines.py`
+- [x] Remove `_initialize_pipeline_llm()` — pipelines handle their own LLM init
+- [x] Replace direct imports with `_run_pipeline_subprocess()` calls
+- [x] Remove `[pipelines]` extra from orchestrator's `pyproject.toml`
+- [x] Update Dockerfile to `pip install` pipelines separately for subprocess use
+- [x] Create `local-dev/` folder with setup scripts
+- [ ] Verify all integration tests pass with subprocess execution
 - [ ] Deploy to Coolify staging and test end-to-end
 
 ---
@@ -479,27 +518,29 @@ Use this checklist when converting your pipeline to an installable package:
 
 ### Q: Do I need to change any of my existing Python code?
 
-**No.** The only change is adding `pyproject.toml` to your repo root. Your Python code stays exactly the same. The `pyproject.toml` just tells pip "here's how to install this directory as a package."
+**Mostly no.** The main requirement is adding `pyproject.toml` and ensuring your entry module has a `main()` function with `argparse` and an `if __name__ == "__main__"` block. Most pipelines already have this. Your internal pipeline logic stays exactly the same.
+
+### Q: The orchestrator used to import my functions directly. What changed?
+
+The orchestrator now runs your pipeline as a **separate subprocess** (`python -m your_module --args`). This means:
+
+- Your pipeline runs in its own Python process
+- Environment variables (like `SUPABASE_URL`) are inherited automatically
+- If your pipeline crashes, the orchestrator stays alive
+- You manage your own LLM initialization inside your `main()` function
 
 ### Q: Will this break my existing Dockerfile?
 
 **No.** Your existing Dockerfile will continue to work. You can optionally update it to use `pip install .` instead of `pip install -r requirements.txt`, but it's not required.
 
-### Q: What if I add a new dependency?
-
-Add it to both `pyproject.toml` (under `dependencies`) **and** `requirements.txt` (for backward compatibility). Over time, you can drop `requirements.txt` once everyone uses `pyproject.toml`.
-
-### Q: What if I need to rename a function the orchestrator uses?
-
-That's a **breaking change**. Bump MAJOR version (e.g., `1.x.x` → `2.0.0`) and coordinate with the orchestrator team before releasing. They need to update `pipelines.py` to use the new function name.
-
 ### Q: Can I still run my pipeline standalone?
 
-**Yes!** The `pyproject.toml` doesn't interfere with running your pipeline directly. `python my_script.py` works exactly as before. The packaging is purely for making your code importable by other projects.
+**Yes!** In fact, that's exactly how the orchestrator runs it now. `python -m your_module --batch-size 10` works the same whether you run it manually or the orchestrator runs it as a subprocess.
 
 ### Q: What about the `__MACOSX` directories in our repos?
 
 Those are macOS compression artifacts and should be `.gitignore`'d. They won't affect packaging, but clean them up:
+
 ```bash
 echo "__MACOSX/" >> .gitignore
 rm -rf __MACOSX/
@@ -508,6 +549,7 @@ rm -rf __MACOSX/
 ### Q: Do we need a private package registry?
 
 **Not initially.** The orchestrator can install directly from git URLs:
+
 ```
 pip install "prebronze-to-bronze @ git+https://github.com/org/repo.git@v1.0.0"
 ```
@@ -526,6 +568,12 @@ graph TB
         ORCH --> |"HTTP :8100"| DASH
     end
 
+    subgraph "Subprocess Execution"
+        PB_PROC["python -m prebronze.orchestrator<br/>--input data.json --source walmart"]
+        BS_PROC["python -m bronze_to_silver.auto_orchestrator<br/>--batch-size 100 --incremental"]
+        SG_PROC["python -m silver_to_gold.auto_orchestrator<br/>--batch-size 100 --incremental"]
+    end
+
     subgraph "Pipeline Repos (Git)"
         PB["prebronze-to-bronze<br/>v1.2.0<br/>pyproject.toml"]
         BS["bronze-to-silver<br/>v1.1.0<br/>pyproject.toml"]
@@ -542,8 +590,15 @@ graph TB
     BS --> |"pip install"| ORCH
     SG --> |"pip install"| ORCH
 
-    ORCH --> SB
-    ORCH --> OAI
+    ORCH --> |"subprocess.run()"| PB_PROC
+    ORCH --> |"subprocess.run()"| BS_PROC
+    ORCH --> |"subprocess.run()"| SG_PROC
+
+    PB_PROC --> SB
+    BS_PROC --> SB
+    BS_PROC --> OAI
+    SG_PROC --> SB
+    SG_PROC --> OAI
     ORCH --> N4J
 ```
 

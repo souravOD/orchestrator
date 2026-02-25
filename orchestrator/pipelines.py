@@ -14,13 +14,16 @@ pipeline.  Each wrapper:
 
 from __future__ import annotations
 
-import concurrent.futures
+import json
 import logging
+import os
+import subprocess
 import sys
+import tempfile
 import time
 import traceback
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from prefect import task
 
@@ -34,33 +37,6 @@ logger = logging.getLogger(__name__)
 # ══════════════════════════════════════════════════════
 # Helpers
 # ══════════════════════════════════════════════════════
-
-def _ensure_pipeline_on_path(pipeline_dir_name: str):
-    """
-    Add the pipeline repo's directory to sys.path so its modules
-    can be imported.  Expects the sibling repos to live next to
-    the ``orchestrator/`` directory, e.g.::
-
-        Orchestration Pipeline/
-        ├── orchestrator/          ← this package
-        ├── prebronze-to-bronze 1/
-        ├── bronze-to-silver 1/
-        └── silver-to-gold 1/
-    """
-    base = Path(__file__).resolve().parent.parent.parent  # Orchestration Pipeline/
-    candidates = sorted(base.glob(f"{pipeline_dir_name}*"))
-    for candidate in candidates:
-        # Find the inner package directory (e.g. prebronze-to-bronze/prebronze-to-bronze/)
-        inner_dirs = sorted(candidate.glob("*/"))
-        for inner in inner_dirs:
-            if inner.is_dir() and not inner.name.startswith("."):
-                path_str = str(inner)
-                if path_str not in sys.path:
-                    sys.path.insert(0, path_str)
-                    logger.debug("Added to sys.path: %s", path_str)
-                return
-    logger.warning("Could not find pipeline directory for: %s", pipeline_dir_name)
-
 
 def _calculate_duration(start: float) -> float:
     """Return elapsed seconds since ``start``."""
@@ -89,29 +65,128 @@ def _check_cancellation(orchestration_run_id: str) -> None:
         raise FlowCancelledError(orchestration_run_id)
 
 
-def _run_with_timeout(
-    fn: Callable[..., Any],
-    args: tuple = (),
-    kwargs: dict | None = None,
+def _stream_pipe(pipe, level: str, pipeline_name: str, accumulator: List[str]) -> None:
+    """
+    Read lines from a subprocess pipe, log each one in real-time,
+    and accumulate for post-run parsing.
+    """
+    log_fn = getattr(logger, level)
+    for line in pipe:
+        accumulator.append(line)
+        stripped = line.rstrip("\n\r")
+        if stripped:
+            log_fn("[%s] %s", pipeline_name, stripped)
+    pipe.close()
+
+
+def _run_pipeline_subprocess(
+    module: str,
+    cli_args: List[str],
     timeout: int | None = None,
     pipeline_name: str = "unknown",
-) -> Any:
+    env_overrides: Dict[str, str] | None = None,
+) -> subprocess.CompletedProcess:
     """
-    Execute ``fn(*args, **kwargs)`` with an optional timeout.
+    Run a pipeline module as a subprocess via ``python -m <module>``.
 
-    Uses a thread-pool so the calling Prefect task isn't blocked.
-    If *timeout* is ``None``, runs without any limit.
+    Output is streamed **line-by-line in real-time** so you can follow
+    pipeline progress as it happens, rather than waiting for completion.
+
+    The subprocess inherits all environment variables (including
+    ``SUPABASE_URL``, ``OPENAI_API_KEY``, etc.) from the orchestrator
+    process, so pipelines configure themselves from env vars.
+
+    Parameters
+    ----------
+    module : str
+        Dotted Python module path, e.g. ``bronze_to_silver.auto_orchestrator``.
+    cli_args : list[str]
+        CLI arguments to pass to the pipeline's ``main()``.
+    timeout : int | None
+        Maximum seconds before the subprocess is killed.
+    pipeline_name : str
+        Human-readable name for logging / error messages.
+    env_overrides : dict | None
+        Extra env vars to add/override for this subprocess.
+
+    Returns
+    -------
+    subprocess.CompletedProcess
+        The completed process with stdout/stderr captured.
+
+    Raises
+    ------
+    PipelineTimeoutError
+        If the subprocess exceeds *timeout*.
+    RuntimeError
+        If the subprocess exits with a non-zero return code.
     """
-    kwargs = kwargs or {}
-    if timeout is None:
-        return fn(*args, **kwargs)
-    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        future = pool.submit(fn, *args, **kwargs)
-        try:
-            return future.result(timeout=timeout)
-        except FuturesTimeout:
-            raise PipelineTimeoutError(pipeline_name, timeout)
+    from threading import Thread
+
+    cmd = [sys.executable, "-m", module] + cli_args
+
+    # Build environment: inherit everything, merge overrides.
+    # PYTHONUNBUFFERED=1 prevents the child process from buffering
+    # stdout when writing to a pipe (non-TTY destination).
+    env = {**os.environ, "PYTHONUNBUFFERED": "1"}
+    if env_overrides:
+        env.update(env_overrides)
+
+    logger.info(
+        "🔧 Subprocess: %s %s (timeout=%s)",
+        module, " ".join(cli_args), timeout,
+    )
+
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
+
+    # Stream stdout and stderr concurrently via daemon threads.
+    # Each thread reads line-by-line, logs immediately, and accumulates
+    # text so callers can still parse proc.stdout after completion.
+    stdout_lines: List[str] = []
+    stderr_lines: List[str] = []
+
+    t_out = Thread(
+        target=_stream_pipe,
+        args=(proc.stdout, "info", pipeline_name, stdout_lines),
+        daemon=True,
+    )
+    t_err = Thread(
+        target=_stream_pipe,
+        args=(proc.stderr, "warning", f"{pipeline_name}:stderr", stderr_lines),
+        daemon=True,
+    )
+    t_out.start()
+    t_err.start()
+
+    # Wait for the process, respecting the timeout
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        t_out.join(timeout=5)
+        t_err.join(timeout=5)
+        raise PipelineTimeoutError(pipeline_name, timeout)
+
+    # Wait for reader threads to drain remaining output
+    t_out.join(timeout=10)
+    t_err.join(timeout=10)
+
+    stdout_text = "".join(stdout_lines)
+    stderr_text = "".join(stderr_lines)
+
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"Pipeline '{pipeline_name}' exited with code {proc.returncode}.\n"
+            f"stderr: {stderr_text[-2000:] if stderr_text else '(empty)'}"
+        )
+
+    return subprocess.CompletedProcess(cmd, proc.returncode, stdout_text, stderr_text)
 
 
 def _store_metrics(pipeline_run_id: str, result: Dict[str, Any]) -> None:
@@ -135,6 +210,40 @@ def _store_metrics(pipeline_run_id: str, result: Dict[str, Any]) -> None:
             logger.warning("Failed to store LLM usage: %s", exc)
 
 
+def _store_dq_summary(
+    pipeline_run_id: str,
+    result: Dict[str, Any],
+    pipeline_name: str = "unknown",
+) -> None:
+    """
+    Persist dq_summary from a pipeline result dict.
+
+    Expects ``result["dq_summary"]`` with keys:
+        total_records, pass_count, fail_count
+    Silently skips if the key is missing.
+    """
+    dq = result.get("dq_summary")
+    if not dq:
+        return
+    try:
+        db.create_dq_summary(
+            pipeline_run_id=pipeline_run_id,
+            table_name=pipeline_name,
+            total_records=dq.get("total_records", 0),
+            pass_count=dq.get("pass_count", 0),
+            fail_count=dq.get("fail_count", 0),
+        )
+        logger.info(
+            "📊 DQ summary stored for %s: %d total, %d pass, %d fail",
+            pipeline_name,
+            dq.get("total_records", 0),
+            dq.get("pass_count", 0),
+            dq.get("fail_count", 0),
+        )
+    except Exception as exc:
+        logger.warning("Failed to store DQ summary: %s", exc)
+
+
 def _validate_contract(result: Dict[str, Any], contract_cls: type, pipeline_name: str) -> None:
     """
     Validate a pipeline result against its Pydantic contract (lenient mode).
@@ -151,14 +260,34 @@ def _validate_contract(result: Dict[str, Any], contract_cls: type, pipeline_name
         )
 
 
+def _parse_pipeline_stdout(stdout: str) -> Dict[str, Any]:
+    """
+    Best-effort extraction of structured data from subprocess stdout.
+
+    Pipelines write human-readable logs to stdout.  This function
+    tries to extract a JSON object if the last non-empty line is
+    valid JSON (future convention), otherwise returns an empty dict.
+    """
+    if not stdout:
+        return {}
+    # Try to find a JSON object in the last line (future convention)
+    for line in reversed(stdout.strip().splitlines()):
+        line = line.strip()
+        if line.startswith("{"):
+            try:
+                return json.loads(line)
+            except json.JSONDecodeError:
+                continue
+    return {}
+
+
 # ══════════════════════════════════════════════════════
 # Task 1: PreBronze → Bronze
 # ══════════════════════════════════════════════════════
 
 @task(
     name="prebronze_to_bronze",
-    retries=settings.orchestrator_max_retries,
-    retry_delay_seconds=settings.orchestrator_retry_delay_seconds,
+    retries=0,
     log_prints=True,
 )
 def run_prebronze_to_bronze(
@@ -208,32 +337,71 @@ def run_prebronze_to_bronze(
     db.update_orchestration_run(orchestration_run_id, current_layer="prebronze_to_bronze")
 
     try:
-        # 2. Import the pipeline
-        _ensure_pipeline_on_path("prebronze-to-bronze")
-        from prebronze.orchestrator import run_sequential  # type: ignore
-        from prebronze.state import OrchestratorState  # type: ignore
+        # 2. Write raw_input to temp JSON file for subprocess
+        input_file = None
+        try:
+            input_file = tempfile.NamedTemporaryFile(
+                mode="w", suffix=".json", delete=False,
+                prefix=f"prebronze_{run_id}_",
+            )
+            json.dump(raw_input, input_file)
+            input_file.close()  # flush & close so subprocess can read it
+            input_path = input_file.name
+        except Exception as write_exc:
+            if input_file and os.path.exists(input_file.name):
+                os.unlink(input_file.name)
+            raise RuntimeError(f"Failed to write temp input file: {write_exc}") from write_exc
 
-        # 3. Build initial state
-        state: Dict[str, Any] = {
-            "source_name": source_name,
-            "ingestion_run_id": run_id,
-            "raw_input": raw_input,
-            **cfg,
-        }
+        # 3. Build CLI args
+        cli_args = [
+            "--input", input_path,
+            "--source-name", source_name,
+            "--ingestion-run-id", str(run_id),
+        ]
+        if cfg.get("output_dir"):
+            cli_args += ["--output-dir", cfg["output_dir"]]
+        if cfg.get("target_table"):
+            cli_args += ["--target-table", cfg["target_table"]]
+        if cfg.get("skip_translation"):
+            cli_args.append("--skip-translation")
 
-        # 4. Run pipeline with timeout
+        # 4. Run pipeline as subprocess
         timeout = db.get_pipeline_timeout("prebronze_to_bronze")
-        logger.info("🚀 Starting PreBronze→Bronze (source=%s, records=%d, timeout=%s)", source_name, len(raw_input), timeout)
-        final_state = _run_with_timeout(
-            run_sequential, args=(state,), timeout=timeout, pipeline_name="prebronze_to_bronze",
+        logger.info(
+            "🚀 Starting PreBronze→Bronze (source=%s, records=%d, timeout=%s)",
+            source_name, len(raw_input), timeout,
+        )
+        proc = _run_pipeline_subprocess(
+            module="prebronze.orchestrator",
+            cli_args=cli_args,
+            timeout=timeout,
+            pipeline_name="prebronze_to_bronze",
+            env_overrides={
+                "OPENAI_MODEL_NAME": cfg.get("prebronze_model_name", "openai/gpt-5-mini"),
+                "OPENAI_API_KEY": cfg.get("prebronze_api_key", "sk-yro00aoQNeQCwajap9tOVQ"),
+            },
         )
 
-        # 5. Extract metrics
-        records_written = final_state.get("records_loaded", 0)
-        records_failed = final_state.get("validation_errors_count", 0)
-        dq_issues = len(final_state.get("validation_errors", []))
+        # 5. Parse result from stdout (best-effort)
+        result = _parse_pipeline_stdout(proc.stdout)
 
-        # 6. Update pipeline run
+        # 5b. Extract detected_table from stdout for downstream decisions
+        #     PreBronze prints: "Supabase load complete: N rows upserted into <table>."
+        if proc.stdout and "upserted into" in proc.stdout:
+            for line in proc.stdout.splitlines():
+                if "upserted into" in line:
+                    table_name = line.split("upserted into")[-1].strip().rstrip(".")
+                    if table_name:
+                        result["detected_table"] = table_name
+                        logger.info("Detected target table from stdout: %s", table_name)
+                    break
+
+        # 6. Extract metrics — use parsed result or estimate from input
+        records_written = result.get("records_loaded", result.get("supabase_rows_written", 0))
+        records_failed = result.get("validation_errors_count", 0)
+        dq_issues = len(result.get("validation_errors", []))
+
+        # 7. Update pipeline run
         db.update_pipeline_run(
             run_id,
             status="completed",
@@ -246,15 +414,12 @@ def run_prebronze_to_bronze(
             duration_seconds=_calculate_duration(start),
         )
 
-        # 7. Persist tool metrics + LLM usage
-        _store_metrics(run_id, final_state)
-
-        # 8. Contract validation (lenient)
-        from .contracts import PreBronzeResult
-        _validate_contract(final_state, PreBronzeResult, "prebronze_to_bronze")
+        # 8. Persist tool metrics + LLM usage + DQ summary
+        _store_metrics(run_id, result)
+        _store_dq_summary(run_id, result, "prebronze_to_bronze")
 
         logger.info("✅ PreBronze→Bronze completed. Written=%d, Failed=%d", records_written, records_failed)
-        return final_state
+        return result
 
     except PipelineTimeoutError:
         db.update_pipeline_run(
@@ -277,6 +442,145 @@ def run_prebronze_to_bronze(
         )
         logger.error("❌ PreBronze→Bronze FAILED: %s", exc)
         raise
+    finally:
+        # Always clean up temp file
+        if input_file and os.path.exists(input_file.name):
+            try:
+                os.unlink(input_file.name)
+            except OSError:
+                logger.warning("Could not remove temp file: %s", input_file.name)
+
+
+# ══════════════════════════════════════════════════════
+# Task 1.5: USDA Nutrition Fetch (conditional)
+# ══════════════════════════════════════════════════════
+
+
+@task(
+    name="usda_nutrition_fetch",
+    retries=0,
+    log_prints=True,
+)
+def run_usda_nutrition_fetch(
+    orchestration_run_id: str,
+    trigger_type: str = "upstream_complete",
+    triggered_by: Optional[str] = None,
+    config: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Fetch USDA nutrition profiles for ingredients found in ``bronze.raw_recipes``.
+
+    This task reads directly from Supabase (no temp-file input needed),
+    queries the USDA FoodData Central API for missing ingredients, and
+    upserts nutrition profiles into ``bronze.raw_ingredients``.
+
+    Parameters
+    ----------
+    orchestration_run_id : str
+        Parent orchestration run id.
+    config : dict, optional
+        Optional keys: ``usda_limit`` (int), ``usda_max_workers`` (int).
+
+    Returns
+    -------
+    dict
+        Statistics: extracted, existing, new, successful, failed, inserted.
+    """
+    cfg = config or {}
+    start = time.time()
+
+    _check_cancellation(orchestration_run_id)
+
+    # 1. Create pipeline run record
+    pipeline_run = db.create_pipeline_run(
+        pipeline_name="usda_nutrition_fetch",
+        orchestration_run_id=orchestration_run_id,
+        trigger_type=trigger_type,
+        triggered_by=triggered_by,
+        run_config=cfg,
+    )
+    run_id = pipeline_run["id"]
+    db.update_orchestration_run(orchestration_run_id, current_layer="usda_nutrition_fetch")
+
+    try:
+        # 2. Build CLI args
+        cli_args: List[str] = []
+        limit = cfg.get("usda_limit")
+        if limit:
+            cli_args += ["--limit", str(limit)]
+        max_workers = cfg.get("usda_max_workers", 3)
+        cli_args += ["--max-workers", str(max_workers)]
+
+        # 3. Run USDA Fetcher as subprocess
+        timeout = cfg.get("usda_timeout", 3600)  # Default 1 hour — USDA API is slow
+        usda_model = cfg.get("usda_model_name", "openai/gpt-5")
+        logger.info(
+            "🔬 Starting USDA Nutrition Fetch (limit=%s, workers=%s, timeout=%s, model=%s)",
+            limit, max_workers, timeout, usda_model,
+        )
+        proc = _run_pipeline_subprocess(
+            module="main_enhanced",
+            cli_args=cli_args,
+            timeout=timeout,
+            pipeline_name="usda_nutrition_fetch",
+            env_overrides={
+                "OPENAI_MODEL_NAME": usda_model,
+                "OPENAI_API_KEY": cfg.get("usda_api_key", "sk-yro00aoQNeQCwajap9tOVQ"),
+            },
+        )
+
+        # 4. Parse result from stdout
+        result = _parse_pipeline_stdout(proc.stdout)
+
+        # 5. Extract stats from stdout lines (best-effort)
+        #    USDA Fetcher prints: "[OK] Extracted N unique ingredients from recipes"
+        #    and final summary stats
+        extracted = result.get("extracted", 0)
+        inserted = result.get("inserted", 0)
+        failed = result.get("failed", 0)
+
+        # 6. Update pipeline run
+        db.update_pipeline_run(
+            run_id,
+            status="completed",
+            records_input=extracted,
+            records_processed=extracted,
+            records_written=inserted,
+            records_failed=failed,
+            completed_at=db._utcnow(),
+            duration_seconds=_calculate_duration(start),
+        )
+
+        _store_metrics(run_id, result)
+        _store_dq_summary(run_id, result, "usda_nutrition_fetch")
+
+        logger.info(
+            "✅ USDA Nutrition Fetch completed. Extracted=%d, Inserted=%d, Failed=%d",
+            extracted, inserted, failed,
+        )
+        return result
+
+    except PipelineTimeoutError:
+        db.update_pipeline_run(
+            run_id,
+            status="timed_out",
+            completed_at=db._utcnow(),
+            duration_seconds=_calculate_duration(start),
+            error_message=f"USDA fetch timed out after {cfg.get('usda_timeout', 3600)}s",
+        )
+        logger.error("⏰ USDA Nutrition Fetch TIMED OUT")
+        raise
+    except Exception as exc:
+        db.update_pipeline_run(
+            run_id,
+            status="failed",
+            completed_at=db._utcnow(),
+            duration_seconds=_calculate_duration(start),
+            error_message=str(exc),
+            error_details={"traceback": traceback.format_exc()},
+        )
+        logger.error("❌ USDA Nutrition Fetch FAILED: %s", exc)
+        raise
 
 
 # ══════════════════════════════════════════════════════
@@ -285,8 +589,7 @@ def run_prebronze_to_bronze(
 
 @task(
     name="bronze_to_silver",
-    retries=settings.orchestrator_max_retries,
-    retry_delay_seconds=settings.orchestrator_retry_delay_seconds,
+    retries=0,
     log_prints=True,
 )
 def run_bronze_to_silver(
@@ -319,18 +622,33 @@ def run_bronze_to_silver(
     db.update_orchestration_run(orchestration_run_id, current_layer="bronze_to_silver")
 
     try:
-        _ensure_pipeline_on_path("bronze-to-silver")
-        from bronze_to_silver.auto_orchestrator import transform_all_tables  # type: ignore
+        # Build CLI args from config
+        batch_size = cfg.get("batch_size", settings.orchestrator_default_batch_size)
+        cli_args = ["--batch-size", str(batch_size)]
+        if cfg.get("incremental", True):
+            cli_args.append("--incremental")
+        if cfg.get("dry_run"):
+            cli_args.append("--dry-run")
+        if cfg.get("enable_schema_diff"):
+            cli_args.append("--enable-schema-diff")
+        if cfg.get("enable_dq_generation"):
+            cli_args.append("--enable-dq-generation")
 
         timeout = db.get_pipeline_timeout("bronze_to_silver")
         logger.info("🚀 Starting Bronze→Silver (auto-discovery mode, timeout=%s)", timeout)
-        result = _run_with_timeout(
-            transform_all_tables, timeout=timeout, pipeline_name="bronze_to_silver",
+        proc = _run_pipeline_subprocess(
+            module="bronze_to_silver.auto_orchestrator",
+            cli_args=cli_args,
+            timeout=timeout,
+            pipeline_name="bronze_to_silver",
         )
 
-        total_processed = result.get("total_processed", 0)
-        total_written = result.get("total_written", 0)
-        total_failed = result.get("total_failed", 0)
+        # Parse structured result from stdout (best-effort)
+        result = _parse_pipeline_stdout(proc.stdout)
+
+        total_processed = result.get("total_records_fetched", 0)
+        total_written = result.get("total_records_written", 0)
+        total_failed = len(result.get("errors", []))
         total_dq = result.get("total_dq_issues", 0)
 
         db.update_pipeline_run(
@@ -346,10 +664,7 @@ def run_bronze_to_silver(
         )
 
         _store_metrics(run_id, result)
-
-        # Contract validation (lenient)
-        from .contracts import TransformResult
-        _validate_contract(result, TransformResult, "bronze_to_silver")
+        _store_dq_summary(run_id, result, "bronze_to_silver")
 
         logger.info("✅ Bronze→Silver completed. Written=%d, DQ=%d", total_written, total_dq)
         return result
@@ -383,8 +698,7 @@ def run_bronze_to_silver(
 
 @task(
     name="silver_to_gold",
-    retries=settings.orchestrator_max_retries,
-    retry_delay_seconds=settings.orchestrator_retry_delay_seconds,
+    retries=0,
     log_prints=True,
 )
 def run_silver_to_gold(
@@ -417,18 +731,31 @@ def run_silver_to_gold(
     db.update_orchestration_run(orchestration_run_id, current_layer="silver_to_gold")
 
     try:
-        _ensure_pipeline_on_path("silver-to-gold")
-        from silver_to_gold.auto_orchestrator import transform_all_tables  # type: ignore
+        # Build CLI args from config
+        batch_size = cfg.get("batch_size", settings.orchestrator_default_batch_size)
+        cli_args = ["--batch-size", str(batch_size)]
+        if cfg.get("incremental", True):
+            cli_args.append("--incremental")
+        if cfg.get("reprocess_all"):
+            cli_args.append("--reprocess-all")
+        if cfg.get("dry_run"):
+            cli_args.append("--dry-run")
 
         timeout = db.get_pipeline_timeout("silver_to_gold")
         logger.info("🚀 Starting Silver→Gold (auto-discovery mode, timeout=%s)", timeout)
-        result = _run_with_timeout(
-            transform_all_tables, timeout=timeout, pipeline_name="silver_to_gold",
+        proc = _run_pipeline_subprocess(
+            module="silver_to_gold.auto_orchestrator",
+            cli_args=cli_args,
+            timeout=timeout,
+            pipeline_name="silver_to_gold",
         )
 
-        total_processed = result.get("total_processed", 0)
-        total_written = result.get("total_written", 0)
-        total_failed = result.get("total_failed", 0)
+        # Parse structured result from stdout (best-effort)
+        result = _parse_pipeline_stdout(proc.stdout)
+
+        total_processed = result.get("total_records_fetched", 0)
+        total_written = result.get("total_records_written", 0)
+        total_failed = len(result.get("errors", []))
 
         db.update_pipeline_run(
             run_id,
@@ -442,10 +769,7 @@ def run_silver_to_gold(
         )
 
         _store_metrics(run_id, result)
-
-        # Contract validation (lenient)
-        from .contracts import TransformResult
-        _validate_contract(result, TransformResult, "silver_to_gold")
+        _store_dq_summary(run_id, result, "silver_to_gold")
 
         logger.info("✅ Silver→Gold completed. Written=%d, Failed=%d", total_written, total_failed)
         return result
@@ -565,6 +889,7 @@ def run_gold_to_neo4j_batch(
             logger.info("✅ Gold→Neo4j batch sync completed (layer=%s)", layer)
 
         _store_metrics(run_id, result_dict)
+        _store_dq_summary(run_id, result_dict, "gold_to_neo4j")
 
         return result_dict
 

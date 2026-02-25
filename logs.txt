@@ -1,0 +1,294 @@
+PS C:\Users\Sourav Patil\Desktop\ASM\Orchestration Pipeline> cd .\orchestrator\
+PS C:\Users\Sourav Patil\Desktop\ASM\Orchestration Pipeline\orchestrator> $env:PYTHONIOENCODING='utf-8'; python -m orchestrator.cli run --flow single_layer --layer prebronze_to_bronze --source-name recipes_test_2 --input data/test_single_recipe_2.json
+🚀 Running flow: single_layer
+2026-02-25 01:02:57 │ INFO     │ prefect │ Starting temporary server on http://127.0.0.1:8124
+See https://docs.prefect.io/v3/concepts/server#how-to-guides for more information on running a dedicated Prefect server.
+2026-02-25 01:03:01 │ INFO     │ httpx │ HTTP Request: GET http://127.0.0.1:8124/api/health "HTTP/1.1 200 OK"
+2026-02-25 01:03:02 │ INFO     │ httpx │ HTTP Request: GET http://127.0.0.1:8124/api/admin/version "HTTP/1.1 200 OK"
+2026-02-25 01:03:02 │ INFO     │ httpx │ HTTP Request: GET http://127.0.0.1:8124/api/csrf-token?client=7e0b59d8-4fdc-47ab-8949-cf65a253f466 "HTTP/1.1 422 Unprocessable Entity"
+2026-02-25 01:03:02 │ INFO     │ httpx │ HTTP Request: POST http://127.0.0.1:8124/api/flows/ "HTTP/1.1 200 OK"
+2026-02-25 01:03:02 │ INFO     │ httpx │ HTTP Request: POST http://127.0.0.1:8124/api/flow_runs/ "HTTP/1.1 201 Created"
+2026-02-25 01:03:02 │ INFO     │ httpx │ HTTP Request: POST http://127.0.0.1:8124/api/flow_runs/03091abb-cf1f-4317-819c-8af7d4736f81/set_state "HTTP/1.1 201 Created"
+2026-02-25 01:03:02 │ INFO     │ httpx │ HTTP Request: GET http://127.0.0.1:8124/api/flow_runs/03091abb-cf1f-4317-819c-8af7d4736f81 "HTTP/1.1 200 OK"
+2026-02-25 01:03:02 │ INFO     │ prefect.flow_runs │ Beginning flow run 'spotted-flamingo' for flow 'single_layer'
+2026-02-25 01:03:02 │ INFO     │ orchestrator.db │ Supabase client initialised for https://xwvkmoixbqyqmyvzcxhs.supabase.co
+2026-02-25 01:03:03 │ INFO     │ httpx │ HTTP Request: POST https://xwvkmoixbqyqmyvzcxhs.supabase.co/rest/v1/orchestration_runs "HTTP/2 201 Created"
+2026-02-25 01:03:03 │ INFO     │ orchestrator.db │ Created orchestration_run b5ebb7be-55d3-42e3-a3e2-c1c3e1a55c99 (flow=single_layer:prebronze_to_bronze, source=None)
+2026-02-25 01:03:03 │ INFO     │ httpx │ HTTP Request: GET http://127.0.0.1:8124/api/flows/7afecf62-2ac5-4ce5-a928-d9a57a33d094 "HTTP/1.1 200 OK"
+2026-02-25 01:03:04 │ INFO     │ httpx │ HTTP Request: GET https://xwvkmoixbqyqmyvzcxhs.supabase.co/rest/v1/orchestration_runs?select=%2A&id=eq.b5ebb7be-55d3-42e3-a3e2-c1c3e1a55c99&limit=1 "HTTP/2 200 OK"
+2026-02-25 01:03:04 │ INFO     │ httpx │ HTTP Request: GET https://xwvkmoixbqyqmyvzcxhs.supabase.co/rest/v1/pipeline_definitions?select=%2A&pipeline_name=eq.prebronze_to_bronze&limit=1 "HTTP/2 200 OK"
+2026-02-25 01:03:04 │ INFO     │ httpx │ HTTP Request: GET http://127.0.0.1:8124/api/csrf-token?client=b11410c8-a9de-4a6a-ae55-7af387266387 "HTTP/1.1 422 Unprocessable Entity"
+2026-02-25 01:03:04 │ INFO     │ httpx │ HTTP Request: POST http://127.0.0.1:8124/api/logs/ "HTTP/1.1 201 Created"
+2026-02-25 01:03:04 │ INFO     │ httpx │ HTTP Request: POST https://xwvkmoixbqyqmyvzcxhs.supabase.co/rest/v1/pipeline_runs "HTTP/2 201 Created"
+2026-02-25 01:03:04 │ INFO     │ orchestrator.db │ Created pipeline_run cfb0ff49-a807-4618-ad77-4abaa8e9b0cf (pipeline=prebronze_to_bronze, orch_run=b5ebb7be-55d3-42e3-a3e2-c1c3e1a55c99)
+2026-02-25 01:03:05 │ INFO     │ httpx │ HTTP Request: PATCH https://xwvkmoixbqyqmyvzcxhs.supabase.co/rest/v1/orchestration_runs?id=eq.b5ebb7be-55d3-42e3-a3e2-c1c3e1a55c99 "HTTP/2 200 OK"
+2026-02-25 01:03:05 │ INFO     │ httpx │ HTTP Request: GET https://xwvkmoixbqyqmyvzcxhs.supabase.co/rest/v1/pipeline_definitions?select=%2A&pipeline_name=eq.prebronze_to_bronze&limit=1 "HTTP/2 200 OK"
+2026-02-25 01:03:05 │ INFO     │ orchestrator.pipelines │ 🚀 Starting PreBronze→Bronze (source=recipes_test_2, records=1, timeout=None)
+2026-02-25 01:03:05 │ INFO     │ orchestrator.pipelines │ 🔧 Subprocess: prebronze.orchestrator --input C:\Users\SOURAV~1\AppData\Local\Temp\prebronze_cfb0ff49-a807-4618-ad77-4abaa8e9b0cf_4nxgh1hk.json --source-name recipes_test_2 --ingestion-run-id cfb0ff49-a807-4618-ad77-4abaa8e9b0cf (timeout=None)
+2026-02-25 01:03:10 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr] 2026-02-25 01:03:10,901 INFO httpx HTTP Request: POST https://litellm.confer.today/chat/completions "HTTP/1.1 401 Unauthorized"
+2026-02-25 01:03:10 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr] 2026-02-25 01:03:10,902 WARNING prebronze.utils LLM invoke failed (attempt 1/5) [AuthenticationError]: Error code: 401 - {'error': {'message': "key not allowed to access model. This key can only access models=['gpt-5-mini']. Tried to access openai/gpt-5-mini", 'type': 'key_model_access_denied', 'param': 'model', 'code': '401'}}
+2026-02-25 01:03:11 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr] 2026-02-25 01:03:11,961 INFO httpx HTTP Request: POST https://litellm.confer.today/chat/completions "HTTP/1.1 401 Unauthorized"
+2026-02-25 01:03:11 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr] 2026-02-25 01:03:11,961 WARNING prebronze.utils LLM invoke failed (attempt 2/5) [AuthenticationError]: Error code: 401 - {'error': {'message': "key not allowed to access model. This key can only access models=['gpt-5-mini']. Tried to access openai/gpt-5-mini", 'type': 'key_model_access_denied', 'param': 'model', 'code': '401'}}
+2026-02-25 01:03:14 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr] 2026-02-25 01:03:14,037 INFO httpx HTTP Request: POST https://litellm.confer.today/chat/completions "HTTP/1.1 401 Unauthorized"
+2026-02-25 01:03:14 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr] 2026-02-25 01:03:14,038 WARNING prebronze.utils LLM invoke failed (attempt 3/5) [AuthenticationError]: Error code: 401 - {'error': {'message': "key not allowed to access model. This key can only access models=['gpt-5-mini']. Tried to access openai/gpt-5-mini", 'type': 'key_model_access_denied', 'param': 'model', 'code': '401'}}
+2026-02-25 01:03:18 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr] 2026-02-25 01:03:18,113 INFO httpx HTTP Request: POST https://litellm.confer.today/chat/completions "HTTP/1.1 401 Unauthorized"
+2026-02-25 01:03:18 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr] 2026-02-25 01:03:18,113 WARNING prebronze.utils LLM invoke failed (attempt 4/5) [AuthenticationError]: Error code: 401 - {'error': {'message': "key not allowed to access model. This key can only access models=['gpt-5-mini']. Tried to access openai/gpt-5-mini", 'type': 'key_model_access_denied', 'param': 'model', 'code': '401'}}
+2026-02-25 01:03:26 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr] 2026-02-25 01:03:26,468 INFO httpx HTTP Request: POST https://litellm.confer.today/chat/completions "HTTP/1.1 401 Unauthorized"
+2026-02-25 01:03:26 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr] 2026-02-25 01:03:26,468 WARNING prebronze.utils LLM invoke failed (attempt 5/5) [AuthenticationError]: Error code: 401 - {'error': {'message': "key not allowed to access model. This key can only access models=['gpt-5-mini']. Tried to access openai/gpt-5-mini", 'type': 'key_model_access_denied', 'param': 'model', 'code': '401'}}
+2026-02-25 01:03:36 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr] 2026-02-25 01:03:36,470 WARNING prebronze.utils LLM invoke exhausted retries, returning default
+2026-02-25 01:03:36 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr] 2026-02-25 01:03:36,470 INFO prebronze.tools.core map_tables â†’ raw_recipes (confidence=0.20)
+2026-02-25 01:03:36 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr] 2026-02-25 01:03:36,689 INFO httpx HTTP Request: POST https://litellm.confer.today/chat/completions "HTTP/1.1 401 Unauthorized"
+2026-02-25 01:03:36 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr] 2026-02-25 01:03:36,689 WARNING prebronze.utils LLM invoke failed (attempt 1/5) [AuthenticationError]: Error code: 401 - {'error': {'message': "key not allowed to access model. This key can only access models=['gpt-5-mini']. Tried to access openai/gpt-5-mini", 'type': 'key_model_access_denied', 'param': 'model', 'code': '401'}}
+2026-02-25 01:03:37 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr] 2026-02-25 01:03:37,767 INFO httpx HTTP Request: POST https://litellm.confer.today/chat/completions "HTTP/1.1 401 Unauthorized"
+2026-02-25 01:03:37 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr] 2026-02-25 01:03:37,768 WARNING prebronze.utils LLM invoke failed (attempt 2/5) [AuthenticationError]: Error code: 401 - {'error': {'message': "key not allowed to access model. This key can only access models=['gpt-5-mini']. Tried to access openai/gpt-5-mini", 'type': 'key_model_access_denied', 'param': 'model', 'code': '401'}}
+2026-02-25 01:03:39 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr] 2026-02-25 01:03:39,830 INFO httpx HTTP Request: POST https://litellm.confer.today/chat/completions "HTTP/1.1 401 Unauthorized"
+2026-02-25 01:03:39 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr] 2026-02-25 01:03:39,832 WARNING prebronze.utils LLM invoke failed (attempt 3/5) [AuthenticationError]: Error code: 401 - {'error': {'message': "key not allowed to access model. This key can only access models=['gpt-5-mini']. Tried to access openai/gpt-5-mini", 'type': 'key_model_access_denied', 'param': 'model', 'code': '401'}}
+2026-02-25 01:03:43 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr] 2026-02-25 01:03:43,912 INFO httpx HTTP Request: POST https://litellm.confer.today/chat/completions "HTTP/1.1 401 Unauthorized"
+2026-02-25 01:03:43 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr] 2026-02-25 01:03:43,912 WARNING prebronze.utils LLM invoke failed (attempt 4/5) [AuthenticationError]: Error code: 401 - {'error': {'message': "key not allowed to access model. This key can only access models=['gpt-5-mini']. Tried to access openai/gpt-5-mini", 'type': 'key_model_access_denied', 'param': 'model', 'code': '401'}}
+2026-02-25 01:03:52 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr] 2026-02-25 01:03:52,141 INFO httpx HTTP Request: POST https://litellm.confer.today/chat/completions "HTTP/1.1 401 Unauthorized"
+2026-02-25 01:03:52 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr] 2026-02-25 01:03:52,143 WARNING prebronze.utils LLM invoke failed (attempt 5/5) [AuthenticationError]: Error code: 401 - {'error': {'message': "key not allowed to access model. This key can only access models=['gpt-5-mini']. Tried to access openai/gpt-5-mini", 'type': 'key_model_access_denied', 'param': 'model', 'code': '401'}}
+2026-02-25 01:04:02 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr] 2026-02-25 01:04:02,144 WARNING prebronze.utils LLM invoke exhausted retries, returning default
+2026-02-25 01:04:02 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr] 2026-02-25 01:04:02,561 INFO httpx HTTP Request: POST https://litellm.confer.today/chat/completions "HTTP/1.1 401 Unauthorized"
+2026-02-25 01:04:02 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr] 2026-02-25 01:04:02,562 WARNING prebronze.utils LLM invoke failed (attempt 1/5) [AuthenticationError]: Error code: 401 - {'error': {'message': "key not allowed to access model. This key can only access models=['gpt-5-mini']. Tried to access openai/gpt-5-mini", 'type': 'key_model_access_denied', 'param': 'model', 'code': '401'}}
+2026-02-25 01:04:03 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr] 2026-02-25 01:04:03,819 INFO httpx HTTP Request: POST https://litellm.confer.today/chat/completions "HTTP/1.1 401 Unauthorized"
+2026-02-25 01:04:03 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr] 2026-02-25 01:04:03,820 WARNING prebronze.utils LLM invoke failed (attempt 2/5) [AuthenticationError]: Error code: 401 - {'error': {'message': "key not allowed to access model. This key can only access models=['gpt-5-mini']. Tried to access openai/gpt-5-mini", 'type': 'key_model_access_denied', 'param': 'model', 'code': '401'}}
+2026-02-25 01:04:05 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr] 2026-02-25 01:04:05,936 INFO httpx HTTP Request: POST https://litellm.confer.today/chat/completions "HTTP/1.1 401 Unauthorized"
+2026-02-25 01:04:05 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr] 2026-02-25 01:04:05,937 WARNING prebronze.utils LLM invoke failed (attempt 3/5) [AuthenticationError]: Error code: 401 - {'error': {'message': "key not allowed to access model. This key can only access models=['gpt-5-mini']. Tried to access openai/gpt-5-mini", 'type': 'key_model_access_denied', 'param': 'model', 'code': '401'}}
+2026-02-25 01:04:10 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr] 2026-02-25 01:04:10,046 INFO httpx HTTP Request: POST https://litellm.confer.today/chat/completions "HTTP/1.1 401 Unauthorized"
+2026-02-25 01:04:10 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr] 2026-02-25 01:04:10,046 WARNING prebronze.utils LLM invoke failed (attempt 4/5) [AuthenticationError]: Error code: 401 - {'error': {'message': "key not allowed to access model. This key can only access models=['gpt-5-mini']. Tried to access openai/gpt-5-mini", 'type': 'key_model_access_denied', 'param': 'model', 'code': '401'}}
+2026-02-25 01:04:18 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr] 2026-02-25 01:04:18,188 INFO httpx HTTP Request: POST https://litellm.confer.today/chat/completions "HTTP/1.1 401 Unauthorized"
+2026-02-25 01:04:18 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr] 2026-02-25 01:04:18,189 WARNING prebronze.utils LLM invoke failed (attempt 5/5) [AuthenticationError]: Error code: 401 - {'error': {'message': "key not allowed to access model. This key can only access models=['gpt-5-mini']. Tried to access openai/gpt-5-mini", 'type': 'key_model_access_denied', 'param': 'model', 'code': '401'}}
+2026-02-25 01:04:28 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr] 2026-02-25 01:04:28,189 WARNING prebronze.utils LLM invoke exhausted retries, returning default
+2026-02-25 01:04:28 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr] 2026-02-25 01:04:28,189 INFO prebronze.tools.core infer_schema_and_map_columns â†’ mapped 1 rows with 1 unique columns
+2026-02-25 01:04:28 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr] 2026-02-25 01:04:28,189 INFO prebronze.tools.core detect_and_translate_non_english â†’ translations_applied=False
+2026-02-25 01:04:28 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr] 2026-02-25 01:04:28,334 INFO httpx HTTP Request: POST https://litellm.confer.today/chat/completions "HTTP/1.1 401 Unauthorized"
+2026-02-25 01:04:28 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr] 2026-02-25 01:04:28,335 WARNING prebronze.utils LLM invoke failed (attempt 1/5) [AuthenticationError]: Error code: 401 - {'error': {'message': "key not allowed to access model. This key can only access models=['gpt-5-mini']. Tried to access openai/gpt-5-mini", 'type': 'key_model_access_denied', 'param': 'model', 'code': '401'}}
+2026-02-25 01:04:29 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr] 2026-02-25 01:04:29,390 INFO httpx HTTP Request: POST https://litellm.confer.today/chat/completions "HTTP/1.1 401 Unauthorized"
+2026-02-25 01:04:29 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr] 2026-02-25 01:04:29,392 WARNING prebronze.utils LLM invoke failed (attempt 2/5) [AuthenticationError]: Error code: 401 - {'error': {'message': "key not allowed to access model. This key can only access models=['gpt-5-mini']. Tried to access openai/gpt-5-mini", 'type': 'key_model_access_denied', 'param': 'model', 'code': '401'}}
+2026-02-25 01:04:31 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr] 2026-02-25 01:04:31,472 INFO httpx HTTP Request: POST https://litellm.confer.today/chat/completions "HTTP/1.1 401 Unauthorized"
+2026-02-25 01:04:31 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr] 2026-02-25 01:04:31,472 WARNING prebronze.utils LLM invoke failed (attempt 3/5) [AuthenticationError]: Error code: 401 - {'error': {'message': "key not allowed to access model. This key can only access models=['gpt-5-mini']. Tried to access openai/gpt-5-mini", 'type': 'key_model_access_denied', 'param': 'model', 'code': '401'}}
+2026-02-25 01:04:35 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr] 2026-02-25 01:04:35,546 INFO httpx HTTP Request: POST https://litellm.confer.today/chat/completions "HTTP/1.1 401 Unauthorized"
+2026-02-25 01:04:35 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr] 2026-02-25 01:04:35,546 WARNING prebronze.utils LLM invoke failed (attempt 4/5) [AuthenticationError]: Error code: 401 - {'error': {'message': "key not allowed to access model. This key can only access models=['gpt-5-mini']. Tried to access openai/gpt-5-mini", 'type': 'key_model_access_denied', 'param': 'model', 'code': '401'}}
+2026-02-25 01:04:43 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr] 2026-02-25 01:04:43,729 INFO httpx HTTP Request: POST https://litellm.confer.today/chat/completions "HTTP/1.1 401 Unauthorized"
+2026-02-25 01:04:43 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr] 2026-02-25 01:04:43,729 WARNING prebronze.utils LLM invoke failed (attempt 5/5) [AuthenticationError]: Error code: 401 - {'error': {'message': "key not allowed to access model. This key can only access models=['gpt-5-mini']. Tried to access openai/gpt-5-mini", 'type': 'key_model_access_denied', 'param': 'model', 'code': '401'}}
+2026-02-25 01:04:53 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr] 2026-02-25 01:04:53,731 WARNING prebronze.utils LLM invoke exhausted retries, returning default
+2026-02-25 01:04:53 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr] 2026-02-25 01:04:53,731 INFO prebronze.tools.core detect_missing_must_have_attributes â†’ compliance_score=0.000 missing=['ingredients', 'instructions', 'recipe_title']
+2026-02-25 01:04:53 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr] Traceback (most recent call last):
+2026-02-25 01:04:53 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr]   File "<frozen runpy>", line 198, in _run_module_as_main
+2026-02-25 01:04:53 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr]   File "<frozen runpy>", line 88, in _run_code
+2026-02-25 01:04:53 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr]   File "C:\Users\Sourav Patil\Desktop\ASM\Orchestration Pipeline\prebronze-to-bronze-main\prebronze-to-bronze-main\prebronze\orchestrator.py", line 180, in <module>
+2026-02-25 01:04:53 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr]     main()
+2026-02-25 01:04:53 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr]   File "C:\Users\Sourav Patil\Desktop\ASM\Orchestration Pipeline\prebronze-to-bronze-main\prebronze-to-bronze-main\prebronze\orchestrator.py", line 167, in main
+2026-02-25 01:04:53 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr]     final_state = run_sequential(state)
+2026-02-25 01:04:53 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr]                   ^^^^^^^^^^^^^^^^^^^^^
+2026-02-25 01:04:53 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr]   File "C:\Users\Sourav Patil\Desktop\ASM\Orchestration Pipeline\prebronze-to-bronze-main\prebronze-to-bronze-main\prebronze\orchestrator.py", line 69, in run_sequential
+2026-02-25 01:04:53 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr]     state = validate_against_bronze_schema(state)
+2026-02-25 01:04:53 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr]             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-02-25 01:04:53 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr]   File "C:\Users\Sourav Patil\Desktop\ASM\Orchestration Pipeline\prebronze-to-bronze-main\prebronze-to-bronze-main\prebronze\tools\core.py", line 364, in validate_against_bronze_schema
+2026-02-25 01:04:53 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr]     raise ValueError("validate_against_bronze_schema failed: " + "; ".join(issues))
+2026-02-25 01:04:53 │ WARNING  │ orchestrator.pipelines │ [prebronze_to_bronze:stderr] ValueError: validate_against_bronze_schema failed: row 1: required field 'recipe_title' is missing/empty; row 1: required field 'ingredients' is missing/empty; row 1: required field 'instructions' is missing/empty
+2026-02-25 01:04:55 │ INFO     │ httpx │ HTTP Request: PATCH https://xwvkmoixbqyqmyvzcxhs.supabase.co/rest/v1/pipeline_runs?id=eq.cfb0ff49-a807-4618-ad77-4abaa8e9b0cf "HTTP/2 200 OK"
+2026-02-25 01:04:55 │ ERROR    │ orchestrator.pipelines │ ❌ PreBronze→Bronze FAILED: Pipeline 'prebronze_to_bronze' exited with code 1.
+stderr: x HTTP Request: POST https://litellm.confer.today/chat/completions "HTTP/1.1 401 Unauthorized"
+2026-02-25 01:04:43,729 WARNING prebronze.utils LLM invoke failed (attempt 5/5) [AuthenticationError]: Error code: 401 - {'error': {'message': "key not allowed to access model. This key can only access models=['gpt-5-mini']. Tried to access openai/gpt-5-mini", 'type': 'key_model_access_denied', 'param': 'model', 'code': '401'}}   
+2026-02-25 01:04:53,731 WARNING prebronze.utils LLM invoke exhausted retries, returning default
+2026-02-25 01:04:53,731 INFO prebronze.tools.core detect_missing_must_have_attributes â†’ compliance_score=0.000 missing=['ingredients', 'instructions', 'recipe_title']
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "C:\Users\Sourav Patil\Desktop\ASM\Orchestration Pipeline\prebronze-to-bronze-main\prebronze-to-bronze-main\prebronze\orchestrator.py", line 180, in <module>  
+    main()
+  File "C:\Users\Sourav Patil\Desktop\ASM\Orchestration Pipeline\prebronze-to-bronze-main\prebronze-to-bronze-main\prebronze\orchestrator.py", line 167, in main      
+    final_state = run_sequential(state)
+                  ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Sourav Patil\Desktop\ASM\Orchestration Pipeline\prebronze-to-bronze-main\prebronze-to-bronze-main\prebronze\orchestrator.py", line 69, in run_sequential
+    state = validate_against_bronze_schema(state)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Sourav Patil\Desktop\ASM\Orchestration Pipeline\prebronze-to-bronze-main\prebronze-to-bronze-main\prebronze\tools\core.py", line 364, in validate_against_bronze_schema
+    raise ValueError("validate_against_bronze_schema failed: " + "; ".join(issues))
+ValueError: validate_against_bronze_schema failed: row 1: required field 'recipe_title' is missing/empty; row 1: required field 'ingredients' is missing/empty; row 1: required field 'instructions' is missing/empty
+
+2026-02-25 01:04:55 │ ERROR    │ prefect.task_runs │ Task run failed with exception: RuntimeError('Pipeline \'prebronze_to_bronze\' exited with code 1.\nstderr: x HTTP Request: POST https://litellm.confer.today/chat/completions "HTTP/1.1 401 Unauthorized"\n2026-02-25 01:04:43,729 WARNING prebronze.utils LLM invoke failed (attempt 5/5) [AuthenticationError]: Error code: 401 - {\'error\': {\'message\': "key not allowed to access model. This key can only access models=[\'gpt-5-mini\']. Tried to access openai/gpt-5-mini", \'type\': \'key_model_access_denied\', \'param\': \'model\', \'code\': \'401\'}}\n2026-02-25 01:04:53,731 WARNING prebronze.utils LLM invoke exhausted retries, returning default\n2026-02-25 01:04:53,731 INFO prebronze.tools.core detect_missing_must_have_attributes â†’ compliance_score=0.000 missing=[\'ingredients\', \'instructions\', \'recipe_title\']\nTraceback (most recent call last):\n  File "<frozen runpy>", line 198, in _run_module_as_main\n  File "<frozen runpy>", line 88, in _run_code\n  File "C:\\Users\\Sourav Patil\\Desktop\\ASM\\Orchestration Pipeline\\prebronze-to-bronze-main\\prebronze-to-bronze-main\\prebronze\\orchestrator.py", line 180, in <module>\n    main()\n  File "C:\\Users\\Sourav Patil\\Desktop\\ASM\\Orchestration Pipeline\\prebronze-to-bronze-main\\prebronze-to-bronze-main\\prebronze\\orchestrator.py", line 167, in main\n    final_state = run_sequential(state)\n                  ^^^^^^^^^^^^^^^^^^^^^\n  File "C:\\Users\\Sourav Patil\\Desktop\\ASM\\Orchestration Pipeline\\prebronze-to-bronze-main\\prebronze-to-bronze-main\\prebronze\\orchestrator.py", line 69, in run_sequential\n    state = validate_against_bronze_schema(state)\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File "C:\\Users\\Sourav Patil\\Desktop\\ASM\\Orchestration Pipeline\\prebronze-to-bronze-main\\prebronze-to-bronze-main\\prebronze\\tools\\core.py", line 364, in validate_against_bronze_schema\n    raise ValueError("validate_against_bronze_schema failed: " + "; ".join(issues))\nValueError: validate_against_bronze_schema failed: row 1: required field \'recipe_title\' is missing/empty; row 1: required field \'ingredients\' is missing/empty; row 1: required field \'instructions\' is missing/empty\n')
+Traceback (most recent call last):
+  File "C:\Users\Sourav Patil\AppData\Local\Programs\Python\Python312\Lib\site-packages\prefect\task_engine.py", line 1014, in run_context
+    yield self
+  File "C:\Users\Sourav Patil\AppData\Local\Programs\Python\Python312\Lib\site-packages\prefect\task_engine.py", line 1673, in run_task_sync
+    engine.call_task_fn(txn)
+  File "C:\Users\Sourav Patil\AppData\Local\Programs\Python\Python312\Lib\site-packages\prefect\task_engine.py", line 1031, in call_task_fn
+    result = call_with_parameters(self.task.fn, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Sourav Patil\AppData\Local\Programs\Python\Python312\Lib\site-packages\prefect\utilities\callables.py", line 210, in call_with_parameters
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Sourav Patil\Desktop\ASM\Orchestration Pipeline\orchestrator\orchestrator\pipelines.py", line 340, in run_prebronze_to_bronze
+    proc = _run_pipeline_subprocess(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Sourav Patil\Desktop\ASM\Orchestration Pipeline\orchestrator\orchestrator\pipelines.py", line 184, in _run_pipeline_subprocess
+    raise RuntimeError(
+RuntimeError: Pipeline 'prebronze_to_bronze' exited with code 1.
+stderr: x HTTP Request: POST https://litellm.confer.today/chat/completions "HTTP/1.1 401 Unauthorized"
+2026-02-25 01:04:43,729 WARNING prebronze.utils LLM invoke failed (attempt 5/5) [AuthenticationError]: Error code: 401 - {'error': {'message': "key not allowed to access model. This key can only access models=['gpt-5-mini']. Tried to access openai/gpt-5-mini", 'type': 'key_model_access_denied', 'param': 'model', 'code': '401'}}   
+2026-02-25 01:04:53,731 WARNING prebronze.utils LLM invoke exhausted retries, returning default
+2026-02-25 01:04:53,731 INFO prebronze.tools.core detect_missing_must_have_attributes â†’ compliance_score=0.000 missing=['ingredients', 'instructions', 'recipe_title']
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "C:\Users\Sourav Patil\Desktop\ASM\Orchestration Pipeline\prebronze-to-bronze-main\prebronze-to-bronze-main\prebronze\orchestrator.py", line 180, in <module>  
+    main()
+  File "C:\Users\Sourav Patil\Desktop\ASM\Orchestration Pipeline\prebronze-to-bronze-main\prebronze-to-bronze-main\prebronze\orchestrator.py", line 167, in main      
+    final_state = run_sequential(state)
+                  ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Sourav Patil\Desktop\ASM\Orchestration Pipeline\prebronze-to-bronze-main\prebronze-to-bronze-main\prebronze\orchestrator.py", line 69, in run_sequential
+    state = validate_against_bronze_schema(state)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Sourav Patil\Desktop\ASM\Orchestration Pipeline\prebronze-to-bronze-main\prebronze-to-bronze-main\prebronze\tools\core.py", line 364, in validate_against_bronze_schema
+    raise ValueError("validate_against_bronze_schema failed: " + "; ".join(issues))
+ValueError: validate_against_bronze_schema failed: row 1: required field 'recipe_title' is missing/empty; row 1: required field 'ingredients' is missing/empty; row 1: required field 'instructions' is missing/empty
+
+2026-02-25 01:04:55 │ ERROR    │ prefect.task_runs │ Finished in state Failed('Task run encountered an exception RuntimeError: Pipeline \'prebronze_to_bronze\' exited with code 1.\nstderr: x HTTP Request: POST https://litellm.confer.today/chat/completions "HTTP/1.1 401 Unauthorized"\n2026-02-25 01:04:43,729 WARNING prebronze.utils LLM invoke failed (attempt 5/5) [AuthenticationError]: Error code: 401 - {\'error\': {\'message\': "key not allowed to access model. This key can only access models=[\'gpt-5-mini\']. Tried to access openai/gpt-5-mini", \'type\': \'key_model_access_denied\', \'param\': \'model\', \'code\': \'401\'}}\n2026-02-25 01:04:53,731 WARNING prebronze.utils LLM invoke exhausted retries, returning default\n2026-02-25 01:04:53,731 INFO prebronze.tools.core detect_missing_must_have_attributes â†’ compliance_score=0.000 missing=[\'ingredients\', \'instructions\', \'recipe_title\']\nTraceback (most recent call last):\n  File "<frozen runpy>", line 198, in _run_module_as_main\n  File "<frozen runpy>", line 88, in _run_code\n  File "C:\\Users\\Sourav Patil\\Desktop\\ASM\\Orchestration Pipeline\\prebronze-to-bronze-main\\prebronze-to-bronze-main\\prebronze\\orchestrator.py", line 180, in <module>\n    main()\n  File "C:\\Users\\Sourav Patil\\Desktop\\ASM\\Orchestration Pipeline\\prebronze-to-bronze-main\\prebronze-to-bronze-main\\prebronze\\orchestrator.py", line 167, in main\n    final_state = run_sequential(state)\n                  ^^^^^^^^^^^^^^^^^^^^^\n  File "C:\\Users\\Sourav Patil\\Desktop\\ASM\\Orchestration Pipeline\\prebronze-to-bronze-main\\prebronze-to-bronze-main\\prebronze\\orchestrator.py", line 69, in run_sequential\n    state = validate_against_bronze_schema(state)\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File "C:\\Users\\Sourav Patil\\Desktop\\ASM\\Orchestration Pipeline\\prebronze-to-bronze-main\\prebronze-to-bronze-main\\prebronze\\tools\\core.py", line 364, in validate_against_bronze_schema\n    raise ValueError("validate_against_bronze_schema failed: " + "; ".join(issues))\nValueError: validate_against_bronze_schema failed: row 1: required field \'recipe_title\' is missing/empty; row 1: required field \'ingredients\' is missing/empty; row 1: required field \'instructions\' is missing/empty\n')
+2026-02-25 01:04:55 │ INFO     │ httpx │ HTTP Request: PATCH https://xwvkmoixbqyqmyvzcxhs.supabase.co/rest/v1/orchestration_runs?id=eq.b5ebb7be-55d3-42e3-a3e2-c1c3e1a55c99 "HTTP/2 200 OK"
+2026-02-25 01:04:55 │ ERROR    │ prefect.flow_runs │ Encountered exception during execution: RuntimeError('Pipeline \'prebronze_to_bronze\' exited with code 1.\nstderr: x HTTP Request: POST https://litellm.confer.today/chat/completions "HTTP/1.1 401 Unauthorized"\n2026-02-25 01:04:43,729 WARNING prebronze.utils LLM invoke failed (attempt 5/5) [AuthenticationError]: Error code: 401 - {\'error\': {\'message\': "key not allowed to access model. This key can only access models=[\'gpt-5-mini\']. Tried to access openai/gpt-5-mini", \'type\': \'key_model_access_denied\', \'param\': \'model\', \'code\': \'401\'}}\n2026-02-25 01:04:53,731 WARNING prebronze.utils LLM invoke exhausted retries, returning default\n2026-02-25 01:04:53,731 INFO prebronze.tools.core detect_missing_must_have_attributes â†’ compliance_score=0.000 missing=[\'ingredients\', \'instructions\', \'recipe_title\']\nTraceback (most recent call last):\n  File "<frozen runpy>", line 198, in _run_module_as_main\n  File "<frozen runpy>", line 88, in _run_code\n  File "C:\\Users\\Sourav Patil\\Desktop\\ASM\\Orchestration Pipeline\\prebronze-to-bronze-main\\prebronze-to-bronze-main\\prebronze\\orchestrator.py", line 180, in <module>\n    main()\n  File "C:\\Users\\Sourav Patil\\Desktop\\ASM\\Orchestration Pipeline\\prebronze-to-bronze-main\\prebronze-to-bronze-main\\prebronze\\orchestrator.py", line 167, in main\n    final_state = run_sequential(state)\n                  ^^^^^^^^^^^^^^^^^^^^^\n  File "C:\\Users\\Sourav Patil\\Desktop\\ASM\\Orchestration Pipeline\\prebronze-to-bronze-main\\prebronze-to-bronze-main\\prebronze\\orchestrator.py", line 69, in run_sequential\n    state = validate_against_bronze_schema(state)\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File "C:\\Users\\Sourav Patil\\Desktop\\ASM\\Orchestration Pipeline\\prebronze-to-bronze-main\\prebronze-to-bronze-main\\prebronze\\tools\\core.py", line 364, in validate_against_bronze_schema\n    raise ValueError("validate_against_bronze_schema failed: " + "; ".join(issues))\nValueError: validate_against_bronze_schema failed: row 1: required field \'recipe_title\' is missing/empty; row 1: required field \'ingredients\' is missing/empty; row 1: required field \'instructions\' is missing/empty\n')
+Traceback (most recent call last):
+  File "C:\Users\Sourav Patil\AppData\Local\Programs\Python\Python312\Lib\site-packages\prefect\flow_engine.py", line 989, in run_context
+    yield self
+  File "C:\Users\Sourav Patil\AppData\Local\Programs\Python\Python312\Lib\site-packages\prefect\flow_engine.py", line 1634, in run_flow_sync
+    engine.call_flow_fn()
+  File "C:\Users\Sourav Patil\AppData\Local\Programs\Python\Python312\Lib\site-packages\prefect\flow_engine.py", line 1009, in call_flow_fn
+    result = call_with_parameters(self.flow.fn, self.parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Sourav Patil\AppData\Local\Programs\Python\Python312\Lib\site-packages\prefect\utilities\callables.py", line 210, in call_with_parameters
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Sourav Patil\Desktop\ASM\Orchestration Pipeline\orchestrator\orchestrator\flows.py", line 445, in single_layer_flow
+    result = run_prebronze_to_bronze(
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Sourav Patil\AppData\Local\Programs\Python\Python312\Lib\site-packages\prefect\tasks.py", line 1209, in __call__
+    return run_task(
+           ^^^^^^^^^
+  File "C:\Users\Sourav Patil\AppData\Local\Programs\Python\Python312\Lib\site-packages\prefect\task_engine.py", line 1900, in run_task
+    return run_task_sync(**kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Sourav Patil\AppData\Local\Programs\Python\Python312\Lib\site-packages\prefect\task_engine.py", line 1675, in run_task_sync
+    return engine.state if return_type == "state" else engine.result()
+                                                       ^^^^^^^^^^^^^^^
+  File "C:\Users\Sourav Patil\AppData\Local\Programs\Python\Python312\Lib\site-packages\prefect\task_engine.py", line 611, in result
+    raise self._raised
+  File "C:\Users\Sourav Patil\AppData\Local\Programs\Python\Python312\Lib\site-packages\prefect\task_engine.py", line 1014, in run_context
+    yield self
+  File "C:\Users\Sourav Patil\AppData\Local\Programs\Python\Python312\Lib\site-packages\prefect\task_engine.py", line 1673, in run_task_sync
+    engine.call_task_fn(txn)
+  File "C:\Users\Sourav Patil\AppData\Local\Programs\Python\Python312\Lib\site-packages\prefect\task_engine.py", line 1031, in call_task_fn
+    result = call_with_parameters(self.task.fn, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Sourav Patil\AppData\Local\Programs\Python\Python312\Lib\site-packages\prefect\utilities\callables.py", line 210, in call_with_parameters
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Sourav Patil\Desktop\ASM\Orchestration Pipeline\orchestrator\orchestrator\pipelines.py", line 340, in run_prebronze_to_bronze
+    proc = _run_pipeline_subprocess(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Sourav Patil\Desktop\ASM\Orchestration Pipeline\orchestrator\orchestrator\pipelines.py", line 184, in _run_pipeline_subprocess
+    raise RuntimeError(
+RuntimeError: Pipeline 'prebronze_to_bronze' exited with code 1.
+stderr: x HTTP Request: POST https://litellm.confer.today/chat/completions "HTTP/1.1 401 Unauthorized"
+2026-02-25 01:04:43,729 WARNING prebronze.utils LLM invoke failed (attempt 5/5) [AuthenticationError]: Error code: 401 - {'error': {'message': "key not allowed to access model. This key can only access models=['gpt-5-mini']. Tried to access openai/gpt-5-mini", 'type': 'key_model_access_denied', 'param': 'model', 'code': '401'}}   
+2026-02-25 01:04:53,731 WARNING prebronze.utils LLM invoke exhausted retries, returning default
+2026-02-25 01:04:53,731 INFO prebronze.tools.core detect_missing_must_have_attributes â†’ compliance_score=0.000 missing=['ingredients', 'instructions', 'recipe_title']
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "C:\Users\Sourav Patil\Desktop\ASM\Orchestration Pipeline\prebronze-to-bronze-main\prebronze-to-bronze-main\prebronze\orchestrator.py", line 180, in <module>  
+    main()
+  File "C:\Users\Sourav Patil\Desktop\ASM\Orchestration Pipeline\prebronze-to-bronze-main\prebronze-to-bronze-main\prebronze\orchestrator.py", line 167, in main      
+    final_state = run_sequential(state)
+                  ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Sourav Patil\Desktop\ASM\Orchestration Pipeline\prebronze-to-bronze-main\prebronze-to-bronze-main\prebronze\orchestrator.py", line 69, in run_sequential
+    state = validate_against_bronze_schema(state)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Sourav Patil\Desktop\ASM\Orchestration Pipeline\prebronze-to-bronze-main\prebronze-to-bronze-main\prebronze\tools\core.py", line 364, in validate_against_bronze_schema
+    raise ValueError("validate_against_bronze_schema failed: " + "; ".join(issues))
+ValueError: validate_against_bronze_schema failed: row 1: required field 'recipe_title' is missing/empty; row 1: required field 'ingredients' is missing/empty; row 1: required field 'instructions' is missing/empty
+
+2026-02-25 01:04:55 │ INFO     │ httpx │ HTTP Request: POST http://127.0.0.1:8124/api/flow_runs/03091abb-cf1f-4317-819c-8af7d4736f81/set_state "HTTP/1.1 201 Created"
+2026-02-25 01:04:55 │ INFO     │ prefect.flow_runs │ Finished in state Failed('Flow run encountered an exception: RuntimeError: Pipeline \'prebronze_to_bronze\' exited with code 1.\nstderr: x HTTP Request: POST https://litellm.confer.today/chat/completions "HTTP/1.1 401 Unauthorized"\n2026-02-25 01:04:43,729 WARNING prebronze.utils LLM invoke failed (attempt 5/5) [AuthenticationError]: Error code: 401 - {\'error\': {\'message\': "key not allowed to access model. This key can only access models=[\'gpt-5-mini\']. Tried to access openai/gpt-5-mini", \'type\': \'key_model_access_denied\', \'param\': \'model\', \'code\': \'401\'}}\n2026-02-25 01:04:53,731 WARNING prebronze.utils LLM invoke exhausted retries, returning default\n2026-02-25 01:04:53,731 INFO prebronze.tools.core detect_missing_must_have_attributes â†’ compliance_score=0.000 missing=[\'ingredients\', \'instructions\', \'recipe_title\']\nTraceback (most recent call last):\n  File "<frozen runpy>", line 198, in _run_module_as_main\n  File "<frozen runpy>", line 88, in _run_code\n  File "C:\\Users\\Sourav Patil\\Desktop\\ASM\\Orchestration Pipeline\\prebronze-to-bronze-main\\prebronze-to-bronze-main\\prebronze\\orchestrator.py", line 180, in <module>\n    main()\n  File "C:\\Users\\Sourav Patil\\Desktop\\ASM\\Orchestration Pipeline\\prebronze-to-bronze-main\\prebronze-to-bronze-main\\prebronze\\orchestrator.py", line 167, in main\n    final_state = run_sequential(state)\n                  ^^^^^^^^^^^^^^^^^^^^^\n  File "C:\\Users\\Sourav Patil\\Desktop\\ASM\\Orchestration Pipeline\\prebronze-to-bronze-main\\prebronze-to-bronze-main\\prebronze\\orchestrator.py", line 69, in run_sequential\n    state = validate_against_bronze_schema(state)\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File "C:\\Users\\Sourav Patil\\Desktop\\ASM\\Orchestration Pipeline\\prebronze-to-bronze-main\\prebronze-to-bronze-main\\prebronze\\tools\\core.py", line 364, in validate_against_bronze_schema\n    raise ValueError("validate_against_bronze_schema failed: " + "; ".join(issues))\nValueError: validate_against_bronze_schema failed: row 1: required field \'recipe_title\' is missing/empty; row 1: required field \'ingredients\' is missing/empty; row 1: required field \'instructions\' is missing/empty\n')
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "C:\Users\Sourav Patil\Desktop\ASM\Orchestration Pipeline\orchestrator\orchestrator\cli.py", line 294, in <module>
+    main()
+  File "C:\Users\Sourav Patil\Desktop\ASM\Orchestration Pipeline\orchestrator\orchestrator\cli.py", line 290, in main
+    args.func(args)
+  File "C:\Users\Sourav Patil\Desktop\ASM\Orchestration Pipeline\orchestrator\orchestrator\cli.py", line 97, in cmd_run
+    result = flow_fn(**kwargs)
+             ^^^^^^^^^^^^^^^^^
+  File "C:\Users\Sourav Patil\AppData\Local\Programs\Python\Python312\Lib\site-packages\prefect\flows.py", line 1850, in __call__
+    return run_flow(
+           ^^^^^^^^^
+  File "C:\Users\Sourav Patil\AppData\Local\Programs\Python\Python312\Lib\site-packages\prefect\flow_engine.py", line 1791, in run_flow
+    ret_val = run_flow_sync(**kwargs)
+              ^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Sourav Patil\AppData\Local\Programs\Python\Python312\Lib\site-packages\prefect\flow_engine.py", line 1636, in run_flow_sync
+    return engine.state if return_type == "state" else engine.result()
+                                                       ^^^^^^^^^^^^^^^
+  File "C:\Users\Sourav Patil\AppData\Local\Programs\Python\Python312\Lib\site-packages\prefect\flow_engine.py", line 539, in result
+    raise self._raised
+  File "C:\Users\Sourav Patil\AppData\Local\Programs\Python\Python312\Lib\site-packages\prefect\flow_engine.py", line 989, in run_context
+    yield self
+  File "C:\Users\Sourav Patil\AppData\Local\Programs\Python\Python312\Lib\site-packages\prefect\flow_engine.py", line 1634, in run_flow_sync
+    engine.call_flow_fn()
+  File "C:\Users\Sourav Patil\AppData\Local\Programs\Python\Python312\Lib\site-packages\prefect\flow_engine.py", line 1009, in call_flow_fn
+    result = call_with_parameters(self.flow.fn, self.parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Sourav Patil\AppData\Local\Programs\Python\Python312\Lib\site-packages\prefect\utilities\callables.py", line 210, in call_with_parameters
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Sourav Patil\Desktop\ASM\Orchestration Pipeline\orchestrator\orchestrator\flows.py", line 445, in single_layer_flow
+    result = run_prebronze_to_bronze(
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Sourav Patil\AppData\Local\Programs\Python\Python312\Lib\site-packages\prefect\tasks.py", line 1209, in __call__
+    return run_task(
+           ^^^^^^^^^
+  File "C:\Users\Sourav Patil\AppData\Local\Programs\Python\Python312\Lib\site-packages\prefect\task_engine.py", line 1900, in run_task
+    return run_task_sync(**kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Sourav Patil\AppData\Local\Programs\Python\Python312\Lib\site-packages\prefect\task_engine.py", line 1675, in run_task_sync
+    return engine.state if return_type == "state" else engine.result()
+                                                       ^^^^^^^^^^^^^^^
+  File "C:\Users\Sourav Patil\AppData\Local\Programs\Python\Python312\Lib\site-packages\prefect\task_engine.py", line 611, in result
+    raise self._raised
+  File "C:\Users\Sourav Patil\AppData\Local\Programs\Python\Python312\Lib\site-packages\prefect\task_engine.py", line 1014, in run_context
+    yield self
+  File "C:\Users\Sourav Patil\AppData\Local\Programs\Python\Python312\Lib\site-packages\prefect\task_engine.py", line 1673, in run_task_sync
+    engine.call_task_fn(txn)
+  File "C:\Users\Sourav Patil\AppData\Local\Programs\Python\Python312\Lib\site-packages\prefect\task_engine.py", line 1031, in call_task_fn
+    result = call_with_parameters(self.task.fn, parameters)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Sourav Patil\AppData\Local\Programs\Python\Python312\Lib\site-packages\prefect\utilities\callables.py", line 210, in call_with_parameters
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Sourav Patil\Desktop\ASM\Orchestration Pipeline\orchestrator\orchestrator\pipelines.py", line 340, in run_prebronze_to_bronze
+    proc = _run_pipeline_subprocess(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Sourav Patil\Desktop\ASM\Orchestration Pipeline\orchestrator\orchestrator\pipelines.py", line 184, in _run_pipeline_subprocess
+    raise RuntimeError(
+RuntimeError: Pipeline 'prebronze_to_bronze' exited with code 1.
+stderr: x HTTP Request: POST https://litellm.confer.today/chat/completions "HTTP/1.1 401 Unauthorized"
+2026-02-25 01:04:43,729 WARNING prebronze.utils LLM invoke failed (attempt 5/5) [AuthenticationError]: Error code: 401 - {'error': {'message': "key not allowed to access model. This key can only access models=['gpt-5-mini']. Tried to access openai/gpt-5-mini", 'type': 'key_model_access_denied', 'param': 'model', 'code': '401'}}   
+2026-02-25 01:04:53,731 WARNING prebronze.utils LLM invoke exhausted retries, returning default
+2026-02-25 01:04:53,731 INFO prebronze.tools.core detect_missing_must_have_attributes â†’ compliance_score=0.000 missing=['ingredients', 'instructions', 'recipe_title']
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "C:\Users\Sourav Patil\Desktop\ASM\Orchestration Pipeline\prebronze-to-bronze-main\prebronze-to-bronze-main\prebronze\orchestrator.py", line 180, in <module>  
+    main()
+  File "C:\Users\Sourav Patil\Desktop\ASM\Orchestration Pipeline\prebronze-to-bronze-main\prebronze-to-bronze-main\prebronze\orchestrator.py", line 167, in main      
+    final_state = run_sequential(state)
+                  ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Sourav Patil\Desktop\ASM\Orchestration Pipeline\prebronze-to-bronze-main\prebronze-to-bronze-main\prebronze\orchestrator.py", line 69, in run_sequential
+    state = validate_against_bronze_schema(state)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Sourav Patil\Desktop\ASM\Orchestration Pipeline\prebronze-to-bronze-main\prebronze-to-bronze-main\prebronze\tools\core.py", line 364, in validate_against_bronze_schema
+    raise ValueError("validate_against_bronze_schema failed: " + "; ".join(issues))
+ValueError: validate_against_bronze_schema failed: row 1: required field 'recipe_title' is missing/empty; row 1: required field 'ingredients' is missing/empty; row 1: required field 'instructions' is missing/empty
+
+2026-02-25 01:04:55 │ INFO     │ httpx │ HTTP Request: POST http://127.0.0.1:8124/api/logs/ "HTTP/1.1 201 Created"
+2026-02-25 01:04:55 │ INFO     │ prefect │ Stopping temporary server on http://127.0.0.1:8124
