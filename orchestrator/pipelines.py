@@ -128,7 +128,25 @@ def _run_pipeline_subprocess(
     # Build environment: inherit everything, merge overrides.
     # PYTHONUNBUFFERED=1 prevents the child process from buffering
     # stdout when writing to a pipe (non-TTY destination).
-    env = {**os.environ, "PYTHONUNBUFFERED": "1"}
+    env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"}
+
+    # ── Ensure all pipeline packages are importable ──────────────
+    # Pipeline packages live in sibling directories relative to
+    # the orchestrator.  Add their parent dirs so that
+    # ``python -m prebronze.orchestrator`` etc. resolve correctly
+    # regardless of whether we're in a venv or system Python.
+    _orch_root = Path(__file__).resolve().parent.parent  # orchestrator/
+    _project_root = _orch_root.parent                    # Orchestration Pipeline/
+    _pipeline_roots = [
+        _project_root / "prebronze-to-bronze-main" / "prebronze-to-bronze-main",
+        _project_root / "bronze-to-silver-main" / "bronze-to-silver-main",
+        _project_root / "silver-to-gold-main" / "silver-to-gold-main" / "silver-to-gold" / "silver-to-gold",
+        _project_root / "Nutrition_USDA_Fetching-main" / "Nutrition_USDA_Fetching-main",
+    ]
+    _existing_pp = env.get("PYTHONPATH", "")
+    _extra_paths = os.pathsep.join(str(p) for p in _pipeline_roots if p.exists())
+    env["PYTHONPATH"] = f"{_extra_paths}{os.pathsep}{_existing_pp}" if _existing_pp else _extra_paths
+
     if env_overrides:
         env.update(env_overrides)
 
@@ -142,6 +160,8 @@ def _run_pipeline_subprocess(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         env=env,
     )
 
@@ -242,6 +262,32 @@ def _store_dq_summary(
         )
     except Exception as exc:
         logger.warning("Failed to store DQ summary: %s", exc)
+
+
+def _store_step_logs(pipeline_run_id: str, result: Dict[str, Any]) -> None:
+    """
+    Create pipeline_step_logs entries from the tool_metrics in a pipeline result.
+
+    Each tool metric is written as a separate step log row, preserving
+    execution order.  Silently skips if tool_metrics is missing.
+    """
+    tool_metrics = result.get("tool_metrics", [])
+    if not tool_metrics:
+        return
+    try:
+        for idx, m in enumerate(tool_metrics, start=1):
+            tool_name = m.get("tool_name") or m.get("tool", "unknown")
+            step = db.create_step_log(pipeline_run_id, tool_name, step_order=idx)
+            db.update_step_log(
+                step["id"],
+                status="completed",
+                records_in=m.get("records_in", 0),
+                records_out=m.get("records_out", 0),
+                duration_ms=round(m.get("duration_ms", 0)),
+            )
+        logger.info("📝 Stored %d step logs for pipeline_run %s", len(tool_metrics), pipeline_run_id)
+    except Exception as exc:
+        logger.warning("Failed to store step logs: %s", exc)
 
 
 def _validate_contract(result: Dict[str, Any], contract_cls: type, pipeline_name: str) -> None:
@@ -417,6 +463,7 @@ def run_prebronze_to_bronze(
         # 8. Persist tool metrics + LLM usage + DQ summary
         _store_metrics(run_id, result)
         _store_dq_summary(run_id, result, "prebronze_to_bronze")
+        _store_step_logs(run_id, result)
 
         logger.info("✅ PreBronze→Bronze completed. Written=%d, Failed=%d", records_written, records_failed)
         return result
@@ -508,8 +555,17 @@ def run_usda_nutrition_fetch(
         limit = cfg.get("usda_limit")
         if limit:
             cli_args += ["--limit", str(limit)]
-        max_workers = cfg.get("usda_max_workers", 3)
+        max_workers = cfg.get("usda_max_workers", 5)
         cli_args += ["--max-workers", str(max_workers)]
+
+        # NOTE: Do NOT pass --ingestion-run-id to USDA fetcher.
+        # Recipes in raw_recipes have the PreBronze run's ingestion_run_id,
+        # not the USDA pipeline's run_id. The USDA fetcher will process
+        # ALL recipes with status 'INGESTED' and skip already-fetched ones.
+
+        # Pass source table if specified (for F3 product extension)
+        source_table = cfg.get("source_table", "raw_recipes")
+        cli_args += ["--source-table", source_table]
 
         # 3. Run USDA Fetcher as subprocess
         timeout = cfg.get("usda_timeout", 3600)  # Default 1 hour — USDA API is slow
@@ -553,6 +609,7 @@ def run_usda_nutrition_fetch(
 
         _store_metrics(run_id, result)
         _store_dq_summary(run_id, result, "usda_nutrition_fetch")
+        _store_step_logs(run_id, result)
 
         logger.info(
             "✅ USDA Nutrition Fetch completed. Extracted=%d, Inserted=%d, Failed=%d",
@@ -665,6 +722,7 @@ def run_bronze_to_silver(
 
         _store_metrics(run_id, result)
         _store_dq_summary(run_id, result, "bronze_to_silver")
+        _store_step_logs(run_id, result)
 
         logger.info("✅ Bronze→Silver completed. Written=%d, DQ=%d", total_written, total_dq)
         return result
@@ -770,6 +828,7 @@ def run_silver_to_gold(
 
         _store_metrics(run_id, result)
         _store_dq_summary(run_id, result, "silver_to_gold")
+        _store_step_logs(run_id, result)
 
         logger.info("✅ Silver→Gold completed. Written=%d, Failed=%d", total_written, total_failed)
         return result
@@ -890,6 +949,7 @@ def run_gold_to_neo4j_batch(
 
         _store_metrics(run_id, result_dict)
         _store_dq_summary(run_id, result_dict, "gold_to_neo4j")
+        _store_step_logs(run_id, result_dict)
 
         return result_dict
 

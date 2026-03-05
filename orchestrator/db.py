@@ -544,8 +544,8 @@ def create_tool_metrics(
     rows = [
         {
             "pipeline_run_id": str(pipeline_run_id),
-            "tool_name": m.get("tool_name", "unknown"),
-            "duration_ms": m.get("duration_ms"),
+            "tool_name": m.get("tool_name") or m.get("tool", "unknown"),
+            "duration_ms": round(m["duration_ms"]) if m.get("duration_ms") is not None else None,
             "records_in": m.get("records_in", 0),
             "records_out": m.get("records_out", 0),
             "status": m.get("status", "completed"),
@@ -572,10 +572,10 @@ def create_llm_usage(
     payload = {
         "pipeline_run_id": str(pipeline_run_id),
         "model": usage.get("model"),
-        "total_prompt_tokens": usage.get("total_prompt_tokens", 0),
-        "total_completion_tokens": usage.get("total_completion_tokens", 0),
+        "total_prompt_tokens": usage.get("total_prompt_tokens") or usage.get("prompt_tokens", 0),
+        "total_completion_tokens": usage.get("total_completion_tokens") or usage.get("completion_tokens", 0),
         "total_tokens": usage.get("total_tokens", 0),
-        "total_cost_usd": usage.get("total_cost_usd", 0),
+        "total_cost_usd": usage.get("total_cost_usd") or usage.get("total_cost", 0),
         "llm_calls": usage.get("llm_calls", 0),
         "call_details": usage.get("calls", []),
     }

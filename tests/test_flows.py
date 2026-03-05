@@ -43,6 +43,23 @@ class TestLoadInput:
         assert len(result) == 1
         assert result[0]["name"] == "single"
 
+    def test_load_json_dict_of_dicts(self, tmp_path):
+        """Dict-of-dicts JSON (keyed records) should expand to list of records."""
+        f = tmp_path / "data.json"
+        f.write_text('{"rec_01": {"title": "A"}, "rec_02": {"title": "B"}, "rec_03": {"title": "C"}}')
+        result = _load_input(str(f))
+        assert len(result) == 3
+        titles = {r["title"] for r in result}
+        assert titles == {"A", "B", "C"}
+
+    def test_load_json_empty_dict(self, tmp_path):
+        """Empty dict should return as single-element list (fallback)."""
+        f = tmp_path / "data.json"
+        f.write_text('{}')
+        result = _load_input(str(f))
+        assert len(result) == 1
+        assert result[0] == {}
+
     def test_load_ndjson(self, tmp_path):
         f = tmp_path / "data.ndjson"
         f.write_text('{"id": 1}\n{"id": 2}\n{"id": 3}\n')

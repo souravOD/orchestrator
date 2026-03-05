@@ -188,14 +188,14 @@ def full_ingestion_flow(
         if "usda_nutrition_fetch" not in completed_layers:
             # Only trigger if PreBronze wrote to raw_recipes
             detected_table = bronze_result.get("detected_table", "") if bronze_result else ""
-            if detected_table == "raw_recipes" or cfg.get("force_usda_fetch"):
+            if detected_table in ("raw_recipes", "raw_products") or cfg.get("force_usda_fetch"):
                 layer_start = time.time()
                 try:
                     usda_result = run_usda_nutrition_fetch(
                         orchestration_run_id=orch_run_id,
                         trigger_type="upstream_complete",
                         triggered_by="prebronze_to_bronze",
-                        config=cfg,
+                        config={**cfg, "source_table": detected_table},
                     )
                     layer_timings["usda_nutrition_fetch"] = round(time.time() - layer_start, 2)
                     results["usda_nutrition_fetch"] = usda_result
@@ -560,7 +560,12 @@ def _load_input(path: str) -> List[Dict[str, Any]]:
     if suffix == ".json":
         with open(file_path, "r", encoding="utf-8") as f:
             data = json.load(f)
-            return data if isinstance(data, list) else [data]
+            if isinstance(data, list):
+                return data
+            if isinstance(data, dict) and data and all(isinstance(v, dict) for v in data.values()):
+                # Dict-of-dicts (keyed records like {"id1": {...}, "id2": {...}})
+                return list(data.values())
+            return [data]  # single flat record fallback
 
     elif suffix in (".ndjson", ".jsonl"):
         records = []
