@@ -144,7 +144,7 @@ def full_ingestion_flow(
             flow_name="full_ingestion",
             trigger_type=trigger_type,
             triggered_by=triggered_by,
-            layers=["prebronze_to_bronze", "usda_nutrition_fetch", "bronze_to_silver", "silver_to_gold", "gold_to_neo4j"],
+            layers=["prebronze_to_bronze", "usda_nutrition_fetch", "bronze_to_silver", "silver_to_gold"],
             config=cfg,
             source_name=source_name,
             vendor_id=vendor_id,
@@ -242,27 +242,27 @@ def full_ingestion_flow(
         else:
             logger.info("⏭️ Skipping silver_to_gold (already completed)")
 
-        # ── Layer 4: Gold → Neo4j (best-effort) ──
-        if "gold_to_neo4j" not in completed_layers:
-            layer_start = time.time()
-            try:
-                neo4j_result = run_gold_to_neo4j_batch(
-                    orchestration_run_id=orch_run_id,
-                    layer="all",
-                    trigger_type="upstream_complete",
-                    triggered_by="silver_to_gold",
-                    config=cfg,
-                )
-                results["gold_to_neo4j"] = neo4j_result
-                logger.info("✅ Gold→Neo4j sync completed as part of full ingestion")
-            except Exception as neo4j_exc:
-                # Neo4j sync failure should not fail the overall ingestion
-                logger.warning("⚠️ Gold→Neo4j sync failed (non-fatal): %s", neo4j_exc)
-                results["gold_to_neo4j"] = {"status": "failed", "error": str(neo4j_exc)}
-            finally:
-                layer_timings["gold_to_neo4j"] = round(time.time() - layer_start, 2)
-        else:
-            logger.info("⏭️ Skipping gold_to_neo4j (already completed)")
+        # ── Layer 4: Gold → Neo4j (disabled for now — will be re-enabled later) ──
+        # if "gold_to_neo4j" not in completed_layers:
+        #     layer_start = time.time()
+        #     try:
+        #         neo4j_result = run_gold_to_neo4j_batch(
+        #             orchestration_run_id=orch_run_id,
+        #             layer="all",
+        #             trigger_type="upstream_complete",
+        #             triggered_by="silver_to_gold",
+        #             config=cfg,
+        #         )
+        #         results["gold_to_neo4j"] = neo4j_result
+        #         logger.info("✅ Gold→Neo4j sync completed as part of full ingestion")
+        #     except Exception as neo4j_exc:
+        #         # Neo4j sync failure should not fail the overall ingestion
+        #         logger.warning("⚠️ Gold→Neo4j sync failed (non-fatal): %s", neo4j_exc)
+        #         results["gold_to_neo4j"] = {"status": "failed", "error": str(neo4j_exc)}
+        #     finally:
+        #         layer_timings["gold_to_neo4j"] = round(time.time() - layer_start, 2)
+        # else:
+        #     logger.info("⏭️ Skipping gold_to_neo4j (already completed)")
 
         # Mark success
         duration = round(time.time() - start, 2)
@@ -434,6 +434,7 @@ def single_layer_flow(
         triggered_by=triggered_by,
         layers=[layer],
         config=cfg,
+        source_name=source_name,
     )
     orch_run_id = orch_run["id"]
     start = time.time()

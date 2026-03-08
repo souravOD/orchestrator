@@ -154,7 +154,7 @@ async def trigger_flow(request: TriggerRequest):
     try:
         # Determine layers based on flow
         if request.flow_name == "full_ingestion":
-            layers = ["prebronze_to_bronze", "bronze_to_silver", "silver_to_gold", "gold_to_neo4j"]
+            layers = ["prebronze_to_bronze", "bronze_to_silver", "silver_to_gold"]
         elif request.flow_name == "bronze_to_gold":
             layers = ["bronze_to_silver", "silver_to_gold"]
         else:
@@ -245,7 +245,7 @@ async def trigger_batch(request: BatchTriggerRequest):
                 trigger_type="api",
                 triggered_by="api:/api/trigger-batch",
                 layers=["prebronze_to_bronze", "bronze_to_silver",
-                        "silver_to_gold", "gold_to_neo4j"],
+                        "silver_to_gold"],
                 config=config,
                 source_name=src.source_name,
                 vendor_id=src.vendor_id,

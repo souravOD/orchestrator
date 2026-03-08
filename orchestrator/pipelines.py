@@ -140,7 +140,7 @@ def _run_pipeline_subprocess(
     _pipeline_roots = [
         _project_root / "prebronze-to-bronze-main" / "prebronze-to-bronze-main",
         _project_root / "bronze-to-silver-main" / "bronze-to-silver-main",
-        _project_root / "silver-to-gold-main" / "silver-to-gold-main" / "silver-to-gold" / "silver-to-gold",
+        _project_root / "silver-to-gold-latest",
         _project_root / "Nutrition_USDA_Fetching-main" / "Nutrition_USDA_Fetching-main",
     ]
     _existing_pp = env.get("PYTHONPATH", "")
@@ -569,7 +569,7 @@ def run_usda_nutrition_fetch(
 
         # 3. Run USDA Fetcher as subprocess
         timeout = cfg.get("usda_timeout", 3600)  # Default 1 hour — USDA API is slow
-        usda_model = cfg.get("usda_model_name", "openai/gpt-5")
+        usda_model = cfg.get("usda_model_name", "openai/gpt-5-mini")
         logger.info(
             "🔬 Starting USDA Nutrition Fetch (limit=%s, workers=%s, timeout=%s, model=%s)",
             limit, max_workers, timeout, usda_model,
