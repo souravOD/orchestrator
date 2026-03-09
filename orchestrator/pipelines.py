@@ -138,10 +138,10 @@ def _run_pipeline_subprocess(
     _orch_root = Path(__file__).resolve().parent.parent  # orchestrator/
     _project_root = _orch_root.parent                    # Orchestration Pipeline/
     _pipeline_roots = [
-        _project_root / "prebronze-to-bronze-main" / "prebronze-to-bronze-main",
-        _project_root / "bronze-to-silver-main" / "bronze-to-silver-main",
-        _project_root / "silver-to-gold-latest",
-        _project_root / "Nutrition_USDA_Fetching-main" / "Nutrition_USDA_Fetching-main",
+        _project_root / "prebronze-to-bronze",
+        _project_root / "bronze-to-silver",
+        _project_root / "silver-to-gold",
+        _project_root / "nutrition-usda-fetching",
     ]
     _existing_pp = env.get("PYTHONPATH", "")
     _extra_paths = os.pathsep.join(str(p) for p in _pipeline_roots if p.exists())
