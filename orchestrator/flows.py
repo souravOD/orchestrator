@@ -111,6 +111,9 @@ def full_ingestion_flow(
     layer uses this so it can return the run_id immediately.
     """
     cfg = config or {}
+    # Inject vendor_id into config so downstream pipelines receive it
+    if vendor_id and "vendor_id" not in cfg:
+        cfg["vendor_id"] = vendor_id
     start = time.time()
 
     # Per-source concurrency guard

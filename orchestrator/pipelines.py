@@ -690,6 +690,10 @@ def run_bronze_to_silver(
             cli_args.append("--enable-schema-diff")
         if cfg.get("enable_dq_generation"):
             cli_args.append("--enable-dq-generation")
+        if cfg.get("vendor_id"):
+            cli_args.extend(["--vendor-id", str(cfg["vendor_id"])])
+        if cfg.get("tables"):
+            cli_args.extend(["--tables", cfg["tables"]])
 
         timeout = db.get_pipeline_timeout("bronze_to_silver")
         logger.info("🚀 Starting Bronze→Silver (auto-discovery mode, timeout=%s)", timeout)
@@ -798,6 +802,10 @@ def run_silver_to_gold(
             cli_args.append("--reprocess-all")
         if cfg.get("dry_run"):
             cli_args.append("--dry-run")
+        if cfg.get("vendor_id"):
+            cli_args.extend(["--vendor-id", str(cfg["vendor_id"])])
+        if cfg.get("tables"):
+            cli_args.extend(["--tables", cfg["tables"]])
 
         timeout = db.get_pipeline_timeout("silver_to_gold")
         logger.info("🚀 Starting Silver→Gold (auto-discovery mode, timeout=%s)", timeout)
