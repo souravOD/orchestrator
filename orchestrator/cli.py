@@ -132,6 +132,8 @@ def cmd_run(args):
         config["skip_translation"] = True
     if args.vendor_id:
         config["vendor_id"] = args.vendor_id
+    if getattr(args, "source_record_id_field", None):
+        config["source_record_id_field"] = args.source_record_id_field
 
     kwargs = {
         "trigger_type": "manual",
@@ -307,6 +309,8 @@ def main():
     run_parser.add_argument("--no-incremental", action="store_true", help="Disable incremental processing")
     run_parser.add_argument("--skip-translation", action="store_true", help="Skip translation step (use for English-only data)")
     run_parser.add_argument("--vendor-id", help="Vendor UUID to associate with this pipeline run")
+    run_parser.add_argument("--source-record-id-field",
+                            help="Force source_record_id to use a specific input column (overrides auto-detection)")
     run_parser.set_defaults(func=cmd_run)
 
     # ── serve ──
