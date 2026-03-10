@@ -410,6 +410,8 @@ def run_prebronze_to_bronze(
             cli_args += ["--target-table", cfg["target_table"]]
         if cfg.get("skip_translation"):
             cli_args.append("--skip-translation")
+        if cfg.get("vendor_id"):
+            cli_args.extend(["--vendor-id", str(cfg["vendor_id"])])
 
         # 4. Run pipeline as subprocess
         timeout = db.get_pipeline_timeout("prebronze_to_bronze")

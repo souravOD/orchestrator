@@ -128,6 +128,10 @@ def cmd_run(args):
         config["batch_size"] = args.batch_size
     if args.no_incremental:
         config["incremental"] = False
+    if args.skip_translation:
+        config["skip_translation"] = True
+    if args.vendor_id:
+        config["vendor_id"] = args.vendor_id
 
     kwargs = {
         "trigger_type": "manual",
@@ -301,6 +305,8 @@ def main():
     run_parser.add_argument("--layer", help="Layer name (for single_layer or neo4j_batch_sync)")
     run_parser.add_argument("--batch-size", type=int, help="Batch size override")
     run_parser.add_argument("--no-incremental", action="store_true", help="Disable incremental processing")
+    run_parser.add_argument("--skip-translation", action="store_true", help="Skip translation step (use for English-only data)")
+    run_parser.add_argument("--vendor-id", help="Vendor UUID to associate with this pipeline run")
     run_parser.set_defaults(func=cmd_run)
 
     # ── serve ──
