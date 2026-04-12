@@ -48,6 +48,30 @@ async def _start_dlq_worker():
     logger.info("DLQ background worker scheduled")
 
 
+@app.on_event("startup")
+async def _start_realtime_worker():
+    """Auto-start the Neo4j realtime outbox poller if enabled."""
+    import os
+    if os.getenv("NEO4J_REALTIME_AUTOSTART", "true").lower() == "true":
+        import threading
+
+        def _run_worker():
+            try:
+                from .neo4j_adapter import Neo4jPipelineAdapter
+                adapter = Neo4jPipelineAdapter()
+                adapter.start_realtime_worker()
+            except Exception as exc:
+                logger.error("Realtime worker crashed: %s", exc, exc_info=True)
+
+        thread = threading.Thread(
+            target=_run_worker, name="realtime-worker", daemon=True,
+        )
+        thread.start()
+        logger.info("🔴 Realtime worker auto-started (daemon thread)")
+    else:
+        logger.info("Realtime worker auto-start disabled (NEO4J_REALTIME_AUTOSTART=false)")
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

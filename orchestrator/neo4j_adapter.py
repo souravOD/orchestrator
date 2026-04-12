@@ -103,8 +103,11 @@ def _resolve_pipeline_root() -> Path:
 
     pipeline_path = workspace_root / settings.neo4j_pipeline_dir
     if not pipeline_path.exists():
-        # Try just the directory name directly
-        pipeline_path = workspace_root / "Gold-to-Neo4j_with_agentic_checks" / "Gold-to-Neo4j_services"
+        # Fallback: Docker container path (cloned by Dockerfile)
+        pipeline_path = Path("/app/gold-to-neo4j")
+    if not pipeline_path.exists():
+        # Fallback: sibling directory with original name
+        pipeline_path = workspace_root / "gold-to-neo4j"
 
     return pipeline_path
 

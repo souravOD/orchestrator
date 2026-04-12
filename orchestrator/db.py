@@ -240,6 +240,7 @@ def update_pipeline_run(
     duration_seconds: Optional[float] = None,
     error_message: Optional[str] = None,
     error_details: Optional[Dict[str, Any]] = None,
+    run_config: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Update fields on a pipeline_run."""
     patch: Dict[str, Any] = {}
@@ -247,6 +248,7 @@ def update_pipeline_run(
         "status", "records_input", "records_processed", "records_written",
         "records_skipped", "records_failed", "dq_issues_found",
         "completed_at", "duration_seconds", "error_message", "error_details",
+        "run_config",
     ):
         val = locals()[field_name]
         if val is not None:
@@ -679,7 +681,7 @@ def list_completed_pipeline_runs(
     """Return pipeline runs that completed successfully for a given orch run."""
     result = (
         _orch_table("pipeline_runs")
-        .select("id, pipeline_name, status")
+        .select("id, pipeline_name, status, run_config")
         .eq("orchestration_run_id", str(orchestration_run_id))
         .eq("status", "completed")
         .execute()

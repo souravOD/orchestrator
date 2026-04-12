@@ -784,7 +784,7 @@
       ],
       "expected_pattern": "Celery, raw"
     },
-    ": nutmeg": {
+    "nutmeg": {
       "search_query": "nutmeg ground",
       "is_phrase": false,
       "preferred_form": "ground",

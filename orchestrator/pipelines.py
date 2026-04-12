@@ -428,7 +428,8 @@ def run_prebronze_to_bronze(
             pipeline_name="prebronze_to_bronze",
             env_overrides={
                 "OPENAI_MODEL_NAME": cfg.get("prebronze_model_name", "openai/gpt-5-mini"),
-                "OPENAI_API_KEY": cfg.get("prebronze_api_key", "sk-yro00aoQNeQCwajap9tOVQ"),
+                # Only override API key if explicitly provided; otherwise inherit from parent env
+                **({"OPENAI_API_KEY": cfg["prebronze_api_key"]} if cfg.get("prebronze_api_key") else {}),
             },
         )
 
@@ -463,6 +464,13 @@ def run_prebronze_to_bronze(
             completed_at=db._utcnow(),
             duration_seconds=_calculate_duration(start),
         )
+
+        # 7b. Persist detected_table for resume recovery
+        if result.get("detected_table"):
+            db.update_pipeline_run(
+                run_id,
+                run_config={"detected_table": result["detected_table"]},
+            )
 
         # 8. Persist tool metrics + LLM usage + DQ summary
         _store_metrics(run_id, result)
@@ -585,7 +593,8 @@ def run_usda_nutrition_fetch(
             pipeline_name="usda_nutrition_fetch",
             env_overrides={
                 "OPENAI_MODEL_NAME": usda_model,
-                "OPENAI_API_KEY": cfg.get("usda_api_key", "sk-yro00aoQNeQCwajap9tOVQ"),
+                # Only override API key if explicitly provided; otherwise inherit from parent env
+                **({"OPENAI_API_KEY": cfg["usda_api_key"]} if cfg.get("usda_api_key") else {}),
             },
         )
 

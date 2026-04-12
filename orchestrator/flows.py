@@ -185,7 +185,20 @@ def full_ingestion_flow(
             total_written += bronze_result.get("records_loaded", 0)
         else:
             logger.info("⏭️ Skipping prebronze_to_bronze (already completed)")
-            bronze_result = {}  # Needed for detected_table check below
+            bronze_result = {}
+            # Recover detected_table from the original completed run
+            if resume_from_run_id:
+                original_p2b = next(
+                    (r for r in completed if r["pipeline_name"] == "prebronze_to_bronze"),
+                    None,
+                )
+                if original_p2b and original_p2b.get("run_config"):
+                    dt = original_p2b["run_config"].get("detected_table", "")
+                    if dt:
+                        bronze_result["detected_table"] = dt
+                        logger.info(
+                            "⏭️ Recovered detected_table from original run: %s", dt
+                        )
 
         # ── Layer 1.5: USDA Nutrition Fetch (conditional) ──
         if "usda_nutrition_fetch" not in completed_layers:
