@@ -21,7 +21,7 @@ RUN pip install --no-cache-dir \
     "prebronze-to-bronze @ git+https://${GITHUB_TOKEN}@github.com/ConferInc/prebronze-to-bronze.git@main" \
     "bronze-to-silver @ git+https://${GITHUB_TOKEN}@github.com/ConferInc/bronze-to-silver.git@main" \
     "silver-to-gold @ git+https://${GITHUB_TOKEN}@github.com/ConferInc/silver-to-gold.git@main" \
-    "nutrition-usda-fetcher @ git+https://${GITHUB_TOKEN}@github.com/ConferInc/nutrition-usda-fetcher.git@main"
+    "nutrition-usda-fetcher @ git+https://${GITHUB_TOKEN}@github.com/ConferInc/Nutrition_USDA_Fetching.git@main"
 
 # Clone Gold-to-Neo4j pipeline for in-process import by neo4j_adapter
 RUN git clone --depth 1 https://${GITHUB_TOKEN}@github.com/ConferInc/gold-to-neo4j.git /app/gold-to-neo4j \

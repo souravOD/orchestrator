@@ -142,6 +142,11 @@ def _run_pipeline_subprocess(
         _project_root / "bronze-to-silver",
         _project_root / "silver-to-gold",
         _project_root / "nutrition-usda-fetching",
+        # Docker container fallback paths (when running inside Coolify)
+        Path("/app/prebronze-to-bronze"),
+        Path("/app/bronze-to-silver"),
+        Path("/app/silver-to-gold"),
+        Path("/app/nutrition-usda-fetching"),
     ]
     _existing_pp = env.get("PYTHONPATH", "")
     _extra_paths = os.pathsep.join(str(p) for p in _pipeline_roots if p.exists())
@@ -427,7 +432,7 @@ def run_prebronze_to_bronze(
             timeout=timeout,
             pipeline_name="prebronze_to_bronze",
             env_overrides={
-                "OPENAI_MODEL_NAME": cfg.get("prebronze_model_name", "openai/gpt-5-mini"),
+                "OPENAI_MODEL_NAME": cfg.get("prebronze_model_name", os.environ.get("OPENAI_MODEL_NAME", "openai/gpt-4o-mini")),
                 # Only override API key if explicitly provided; otherwise inherit from parent env
                 **({"OPENAI_API_KEY": cfg["prebronze_api_key"]} if cfg.get("prebronze_api_key") else {}),
             },
@@ -581,7 +586,7 @@ def run_usda_nutrition_fetch(
 
         # 3. Run USDA Fetcher as subprocess
         timeout = cfg.get("usda_timeout", 3600)  # Default 1 hour — USDA API is slow
-        usda_model = cfg.get("usda_model_name", "openai/gpt-5-mini")
+        usda_model = cfg.get("usda_model_name", os.environ.get("OPENAI_MODEL_NAME", "openai/gpt-4o-mini"))
         logger.info(
             "🔬 Starting USDA Nutrition Fetch (limit=%s, workers=%s, timeout=%s, model=%s)",
             limit, max_workers, timeout, usda_model,
