@@ -268,7 +268,7 @@ async def trigger_batch(request: BatchTriggerRequest):
                 flow_name=request.flow_name,
                 trigger_type="api",
                 triggered_by="api:/api/trigger-batch",
-                layers=["prebronze_to_bronze", "bronze_to_silver",
+                layers=["prebronze_to_bronze", "usda_nutrition_fetch", "bronze_to_silver",
                         "silver_to_gold"],
                 config=config,
                 source_name=src.source_name,
