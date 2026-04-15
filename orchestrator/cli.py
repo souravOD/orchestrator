@@ -150,6 +150,8 @@ def cmd_run(args):
             sys.exit(1)
         kwargs["source_name"] = args.source_name
         kwargs["input_path"] = args.input
+        if args.vendor_id:
+            kwargs["vendor_id"] = args.vendor_id
     elif args.flow == "single_layer":
         if not args.layer:
             print("❌ --layer is required for single_layer flow")
