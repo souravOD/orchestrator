@@ -70,7 +70,7 @@ class OrchestratorSettings(BaseSettings):
     crewai_enabled: bool = False
 
     # ── Gold-to-Neo4j pipeline path ──────────────────
-    neo4j_pipeline_dir: str = "Gold-to-Neo4j_with_agentic_checks/Gold-to-Neo4j_services"
+    neo4j_pipeline_dir: str = "gold-to-neo4j"
 
     # ── Parallel Ingestion ───────────────────────────
     parallel_max_concurrency: int = 2               # max sources running simultaneously

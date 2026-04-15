@@ -8,11 +8,30 @@ Schedule registration and webhook event dispatching.
 from __future__ import annotations
 
 import logging
+import time as _time
 from typing import Any, Dict, List, Optional
 
 from . import db
 
 logger = logging.getLogger(__name__)
+
+# ── Debounce logic for Gold schema batch syncs ──
+_last_batch_trigger: Dict[str, float] = {}
+_DEBOUNCE_SECONDS = 30
+
+
+def _should_debounce(source_table: str) -> bool:
+    """Prevent redundant batch syncs within the debounce window."""
+    now = _time.time()
+    last = _last_batch_trigger.get(source_table, 0)
+    if now - last < _DEBOUNCE_SECONDS:
+        logger.info(
+            "⏳ Debouncing batch sync for %s (%.0fs since last)",
+            source_table, now - last,
+        )
+        return True
+    _last_batch_trigger[source_table] = now
+    return False
 
 
 # ══════════════════════════════════════════════════════
@@ -134,6 +153,8 @@ def handle_webhook_event(payload: Dict[str, Any]) -> Dict[str, Any]:
 
         # Route Gold schema events to Neo4j batch sync
         if source_schema == "gold":
+            if _should_debounce(source_table):
+                return {"status": "debounced", "table": source_table}
             logger.info(
                 "📡 Gold schema event detected — routing to neo4j_batch_sync"
             )

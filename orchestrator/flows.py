@@ -38,6 +38,7 @@ from .pipelines import (
     run_gold_to_neo4j_reconciliation,
     run_prebronze_to_bronze,
     run_silver_to_gold,
+    run_usda_nutrition_fetch,
 )
 
 logger = logging.getLogger(__name__)
@@ -110,6 +111,9 @@ def full_ingestion_flow(
     layer uses this so it can return the run_id immediately.
     """
     cfg = config or {}
+    # Inject vendor_id into config so downstream pipelines receive it
+    if vendor_id and "vendor_id" not in cfg:
+        cfg["vendor_id"] = vendor_id
     start = time.time()
 
     # Per-source concurrency guard
@@ -143,7 +147,7 @@ def full_ingestion_flow(
             flow_name="full_ingestion",
             trigger_type=trigger_type,
             triggered_by=triggered_by,
-            layers=["prebronze_to_bronze", "bronze_to_silver", "silver_to_gold", "gold_to_neo4j"],
+            layers=["prebronze_to_bronze", "usda_nutrition_fetch", "bronze_to_silver", "silver_to_gold"],
             config=cfg,
             source_name=source_name,
             vendor_id=vendor_id,
@@ -181,6 +185,47 @@ def full_ingestion_flow(
             total_written += bronze_result.get("records_loaded", 0)
         else:
             logger.info("⏭️ Skipping prebronze_to_bronze (already completed)")
+            bronze_result = {}
+            # Recover detected_table from the original completed run
+            if resume_from_run_id:
+                original_p2b = next(
+                    (r for r in completed if r["pipeline_name"] == "prebronze_to_bronze"),
+                    None,
+                )
+                if original_p2b and original_p2b.get("run_config"):
+                    dt = original_p2b["run_config"].get("detected_table", "")
+                    if dt:
+                        bronze_result["detected_table"] = dt
+                        logger.info(
+                            "⏭️ Recovered detected_table from original run: %s", dt
+                        )
+
+        # ── Layer 1.5: USDA Nutrition Fetch (conditional) ──
+        if "usda_nutrition_fetch" not in completed_layers:
+            # Only trigger if PreBronze wrote to raw_recipes
+            detected_table = bronze_result.get("detected_table", "") if bronze_result else ""
+            if detected_table in ("raw_recipes", "raw_products") or cfg.get("force_usda_fetch"):
+                layer_start = time.time()
+                try:
+                    usda_result = run_usda_nutrition_fetch(
+                        orchestration_run_id=orch_run_id,
+                        trigger_type="upstream_complete",
+                        triggered_by="prebronze_to_bronze",
+                        config={**cfg, "source_table": detected_table or "raw_recipes"},
+                    )
+                    layer_timings["usda_nutrition_fetch"] = round(time.time() - layer_start, 2)
+                    results["usda_nutrition_fetch"] = usda_result
+                    total_written += usda_result.get("inserted", 0)
+                    logger.info("✅ USDA Nutrition Fetch completed")
+                except Exception as usda_exc:
+                    # USDA fetch failure should not fail the overall ingestion
+                    logger.warning("⚠️ USDA Nutrition Fetch failed (non-fatal): %s", usda_exc)
+                    results["usda_nutrition_fetch"] = {"status": "failed", "error": str(usda_exc)}
+                    layer_timings["usda_nutrition_fetch"] = round(time.time() - layer_start, 2)
+            else:
+                logger.info("⏭️ Skipping USDA fetch (detected_table=%s, not raw_recipes)", detected_table)
+        else:
+            logger.info("⏭️ Skipping usda_nutrition_fetch (already completed)")
 
         # ── Layer 2: Bronze → Silver ──
         if "bronze_to_silver" not in completed_layers:
@@ -213,27 +258,27 @@ def full_ingestion_flow(
         else:
             logger.info("⏭️ Skipping silver_to_gold (already completed)")
 
-        # ── Layer 4: Gold → Neo4j (best-effort) ──
-        if "gold_to_neo4j" not in completed_layers:
-            layer_start = time.time()
-            try:
-                neo4j_result = run_gold_to_neo4j_batch(
-                    orchestration_run_id=orch_run_id,
-                    layer="all",
-                    trigger_type="upstream_complete",
-                    triggered_by="silver_to_gold",
-                    config=cfg,
-                )
-                results["gold_to_neo4j"] = neo4j_result
-                logger.info("✅ Gold→Neo4j sync completed as part of full ingestion")
-            except Exception as neo4j_exc:
-                # Neo4j sync failure should not fail the overall ingestion
-                logger.warning("⚠️ Gold→Neo4j sync failed (non-fatal): %s", neo4j_exc)
-                results["gold_to_neo4j"] = {"status": "failed", "error": str(neo4j_exc)}
-            finally:
-                layer_timings["gold_to_neo4j"] = round(time.time() - layer_start, 2)
-        else:
-            logger.info("⏭️ Skipping gold_to_neo4j (already completed)")
+        # ── Layer 4: Gold → Neo4j (disabled for now — will be re-enabled later) ──
+        # if "gold_to_neo4j" not in completed_layers:
+        #     layer_start = time.time()
+        #     try:
+        #         neo4j_result = run_gold_to_neo4j_batch(
+        #             orchestration_run_id=orch_run_id,
+        #             layer="all",
+        #             trigger_type="upstream_complete",
+        #             triggered_by="silver_to_gold",
+        #             config=cfg,
+        #         )
+        #         results["gold_to_neo4j"] = neo4j_result
+        #         logger.info("✅ Gold→Neo4j sync completed as part of full ingestion")
+        #     except Exception as neo4j_exc:
+        #         # Neo4j sync failure should not fail the overall ingestion
+        #         logger.warning("⚠️ Gold→Neo4j sync failed (non-fatal): %s", neo4j_exc)
+        #         results["gold_to_neo4j"] = {"status": "failed", "error": str(neo4j_exc)}
+        #     finally:
+        #         layer_timings["gold_to_neo4j"] = round(time.time() - layer_start, 2)
+        # else:
+        #     logger.info("⏭️ Skipping gold_to_neo4j (already completed)")
 
         # Mark success
         duration = round(time.time() - start, 2)
@@ -367,6 +412,7 @@ def bronze_to_gold_flow(
 
 LAYER_TASKS = {
     "prebronze_to_bronze": run_prebronze_to_bronze,
+    "usda_nutrition_fetch": run_usda_nutrition_fetch,
     "bronze_to_silver": run_bronze_to_silver,
     "silver_to_gold": run_silver_to_gold,
 }
@@ -404,6 +450,7 @@ def single_layer_flow(
         triggered_by=triggered_by,
         layers=[layer],
         config=cfg,
+        source_name=source_name,
     )
     orch_run_id = orch_run["id"]
     start = time.time()
@@ -530,7 +577,12 @@ def _load_input(path: str) -> List[Dict[str, Any]]:
     if suffix == ".json":
         with open(file_path, "r", encoding="utf-8") as f:
             data = json.load(f)
-            return data if isinstance(data, list) else [data]
+            if isinstance(data, list):
+                return data
+            if isinstance(data, dict) and data and all(isinstance(v, dict) for v in data.values()):
+                # Dict-of-dicts (keyed records like {"id1": {...}, "id2": {...}})
+                return list(data.values())
+            return [data]  # single flat record fallback
 
     elif suffix in (".ndjson", ".jsonl"):
         records = []

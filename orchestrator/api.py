@@ -48,6 +48,30 @@ async def _start_dlq_worker():
     logger.info("DLQ background worker scheduled")
 
 
+@app.on_event("startup")
+async def _start_realtime_worker():
+    """Auto-start the Neo4j realtime outbox poller if enabled."""
+    import os
+    if os.getenv("NEO4J_REALTIME_AUTOSTART", "true").lower() == "true":
+        import threading
+
+        def _run_worker():
+            try:
+                from .neo4j_adapter import Neo4jPipelineAdapter
+                adapter = Neo4jPipelineAdapter()
+                adapter.start_realtime_worker()
+            except Exception as exc:
+                logger.error("Realtime worker crashed: %s", exc, exc_info=True)
+
+        thread = threading.Thread(
+            target=_run_worker, name="realtime-worker", daemon=True,
+        )
+        thread.start()
+        logger.info("🔴 Realtime worker auto-started (daemon thread)")
+    else:
+        logger.info("Realtime worker auto-start disabled (NEO4J_REALTIME_AUTOSTART=false)")
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -154,7 +178,7 @@ async def trigger_flow(request: TriggerRequest):
     try:
         # Determine layers based on flow
         if request.flow_name == "full_ingestion":
-            layers = ["prebronze_to_bronze", "bronze_to_silver", "silver_to_gold", "gold_to_neo4j"]
+            layers = ["prebronze_to_bronze", "usda_nutrition_fetch", "bronze_to_silver", "silver_to_gold"]
         elif request.flow_name == "bronze_to_gold":
             layers = ["bronze_to_silver", "silver_to_gold"]
         else:
@@ -245,7 +269,7 @@ async def trigger_batch(request: BatchTriggerRequest):
                 trigger_type="api",
                 triggered_by="api:/api/trigger-batch",
                 layers=["prebronze_to_bronze", "bronze_to_silver",
-                        "silver_to_gold", "gold_to_neo4j"],
+                        "silver_to_gold"],
                 config=config,
                 source_name=src.source_name,
                 vendor_id=src.vendor_id,

@@ -240,6 +240,7 @@ def update_pipeline_run(
     duration_seconds: Optional[float] = None,
     error_message: Optional[str] = None,
     error_details: Optional[Dict[str, Any]] = None,
+    run_config: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Update fields on a pipeline_run."""
     patch: Dict[str, Any] = {}
@@ -247,6 +248,7 @@ def update_pipeline_run(
         "status", "records_input", "records_processed", "records_written",
         "records_skipped", "records_failed", "dq_issues_found",
         "completed_at", "duration_seconds", "error_message", "error_details",
+        "run_config",
     ):
         val = locals()[field_name]
         if val is not None:
@@ -544,8 +546,8 @@ def create_tool_metrics(
     rows = [
         {
             "pipeline_run_id": str(pipeline_run_id),
-            "tool_name": m.get("tool_name", "unknown"),
-            "duration_ms": m.get("duration_ms"),
+            "tool_name": m.get("tool_name") or m.get("tool", "unknown"),
+            "duration_ms": round(m["duration_ms"]) if m.get("duration_ms") is not None else None,
             "records_in": m.get("records_in", 0),
             "records_out": m.get("records_out", 0),
             "status": m.get("status", "completed"),
@@ -572,10 +574,10 @@ def create_llm_usage(
     payload = {
         "pipeline_run_id": str(pipeline_run_id),
         "model": usage.get("model"),
-        "total_prompt_tokens": usage.get("total_prompt_tokens", 0),
-        "total_completion_tokens": usage.get("total_completion_tokens", 0),
+        "total_prompt_tokens": usage.get("total_prompt_tokens") or usage.get("prompt_tokens", 0),
+        "total_completion_tokens": usage.get("total_completion_tokens") or usage.get("completion_tokens", 0),
         "total_tokens": usage.get("total_tokens", 0),
-        "total_cost_usd": usage.get("total_cost_usd", 0),
+        "total_cost_usd": usage.get("total_cost_usd") or usage.get("total_cost", 0),
         "llm_calls": usage.get("llm_calls", 0),
         "call_details": usage.get("calls", []),
     }
@@ -679,7 +681,7 @@ def list_completed_pipeline_runs(
     """Return pipeline runs that completed successfully for a given orch run."""
     result = (
         _orch_table("pipeline_runs")
-        .select("id, pipeline_name, status")
+        .select("id, pipeline_name, status, run_config")
         .eq("orchestration_run_id", str(orchestration_run_id))
         .eq("status", "completed")
         .execute()
