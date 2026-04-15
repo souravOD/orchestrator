@@ -223,7 +223,7 @@ class TestUsdaNutritionFetch:
     @patch("orchestrator.pipelines.db")
     @patch("orchestrator.pipelines._run_pipeline_subprocess")
     def test_default_workers_when_not_specified(self, mock_subprocess, mock_db):
-        """Without usda_max_workers config, should default to 3."""
+        """Without usda_max_workers config, should default to 5."""
         mock_db.create_pipeline_run.return_value = {"id": "usda-run-2"}
         mock_db._utcnow.return_value = "2026-01-01T00:00:00"
         mock_db.update_orchestration_run.return_value = {}
@@ -243,7 +243,7 @@ class TestUsdaNutritionFetch:
         cli_args = mock_subprocess.call_args[1]["cli_args"]
         assert "--max-workers" in cli_args
         idx = cli_args.index("--max-workers")
-        assert cli_args[idx + 1] == "3"
+        assert cli_args[idx + 1] == "5"
 
     @patch("orchestrator.pipelines.db")
     @patch("orchestrator.pipelines._run_pipeline_subprocess")

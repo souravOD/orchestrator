@@ -178,7 +178,7 @@ async def trigger_flow(request: TriggerRequest):
     try:
         # Determine layers based on flow
         if request.flow_name == "full_ingestion":
-            layers = ["prebronze_to_bronze", "bronze_to_silver", "silver_to_gold"]
+            layers = ["prebronze_to_bronze", "usda_nutrition_fetch", "bronze_to_silver", "silver_to_gold"]
         elif request.flow_name == "bronze_to_gold":
             layers = ["bronze_to_silver", "silver_to_gold"]
         else:

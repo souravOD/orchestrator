@@ -211,7 +211,7 @@ def full_ingestion_flow(
                         orchestration_run_id=orch_run_id,
                         trigger_type="upstream_complete",
                         triggered_by="prebronze_to_bronze",
-                        config={**cfg, "source_table": detected_table},
+                        config={**cfg, "source_table": detected_table or "raw_recipes"},
                     )
                     layer_timings["usda_nutrition_fetch"] = round(time.time() - layer_start, 2)
                     results["usda_nutrition_fetch"] = usda_result
