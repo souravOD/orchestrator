@@ -18,9 +18,9 @@ ARG GITHUB_TOKEN
 # Install pipeline packages so `python -m <module>` works in subprocess mode.
 # Pin to specific tags/commits in production for reproducibility.
 RUN pip install --no-cache-dir \
-    "prebronze-to-bronze @ git+https://${GITHUB_TOKEN}@github.com/ConferInc/prebronze-to-bronze.git@main" \
-    "bronze-to-silver @ git+https://${GITHUB_TOKEN}@github.com/ConferInc/bronze-to-silver.git@main" \
-    "silver-to-gold @ git+https://${GITHUB_TOKEN}@github.com/ConferInc/silver-to-gold.git@main" \
+    "prebronze-to-bronze @ git+https://${GITHUB_TOKEN}@github.com/ConferInc/prebronze-to-bronze.git@sourav-orchestration" \
+    "bronze-to-silver @ git+https://${GITHUB_TOKEN}@github.com/ConferInc/bronze-to-silver.git@sourav-orchestration" \
+    "silver-to-gold @ git+https://${GITHUB_TOKEN}@github.com/ConferInc/silver-to-gold.git@sourav-orchestration" \
     "nutrition-usda-fetcher @ git+https://${GITHUB_TOKEN}@github.com/ConferInc/Nutrition_USDA_Fetching.git@main"
 
 # Clone Gold-to-Neo4j pipeline for in-process import by neo4j_adapter
