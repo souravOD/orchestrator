@@ -33,8 +33,8 @@ COPY . .
 # Expose API port
 EXPOSE 8100
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+# Health check – generous start-period for heavy imports (torch, langchain, neo4j)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=5 \
     CMD curl -f http://localhost:8100/health || exit 1
 
 # Default command: start the orchestrator API server
