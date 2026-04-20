@@ -1,0 +1,65 @@
+## ---------- Docker Compose for Coolify Deployment (Raw Mode) ----------
+## Provides multi-network support so the orchestrator can be reached by
+## pg_net (inside supabase-db) for webhook triggers AND by the Coolify
+## proxy (Traefik) for external HTTP routing.
+##
+## USAGE: In Coolify, switch build pack from "Dockerfile" to "Docker Compose"
+##        and ENABLE "Is Raw Compose Deployment Enabled" in Advanced settings.
+##        Raw mode is REQUIRED — non-raw mode strips our supabase network.
+##        Environment variables are injected by Coolify into .env file.
+##
+## NOTE: Traefik labels are explicitly declared because raw mode does not
+##       auto-inject them. Update the Host rules if the domain changes.
+
+services:
+  orchestrator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        GITHUB_TOKEN: ${GITHUB_TOKEN}
+    container_name: ${COOLIFY_CONTAINER_NAME:-orchestrator-api}
+    restart: unless-stopped
+    expose:
+      - "8100"
+    networks:
+      coolify:
+        aliases:
+          - orchestrator
+      supabase:
+        aliases:
+          - orchestrator
+    env_file:
+      - .env
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8100/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 90s
+      retries: 5
+    labels:
+      # ── Coolify Management ──
+      - "coolify.managed=true"
+      # ── Traefik HTTP Routing ──
+      - "traefik.enable=true"
+      - "traefik.http.routers.http-0-q6soena53w4b7vy4dlbm08s6.entrypoints=http"
+      - "traefik.http.routers.http-0-q6soena53w4b7vy4dlbm08s6.rule=Host(`q6soena53w4b7vy4dlbm08s6.207.244.226.234.sslip.io`)"
+      - "traefik.http.routers.http-0-q6soena53w4b7vy4dlbm08s6.service=http-0-q6soena53w4b7vy4dlbm08s6"
+      - "traefik.http.services.http-0-q6soena53w4b7vy4dlbm08s6.loadbalancer.server.port=8100"
+      # ── Traefik HTTPS Routing ──
+      - "traefik.http.routers.https-0-q6soena53w4b7vy4dlbm08s6.entrypoints=https"
+      - "traefik.http.routers.https-0-q6soena53w4b7vy4dlbm08s6.rule=Host(`q6soena53w4b7vy4dlbm08s6.207.244.226.234.sslip.io`)"
+      - "traefik.http.routers.https-0-q6soena53w4b7vy4dlbm08s6.service=http-0-q6soena53w4b7vy4dlbm08s6"
+      - "traefik.http.routers.https-0-q6soena53w4b7vy4dlbm08s6.tls=true"
+      - "traefik.http.routers.https-0-q6soena53w4b7vy4dlbm08s6.tls.certresolver=letsencrypt"
+      # ── Caddy Fallback ──
+      - "caddy_0=http://q6soena53w4b7vy4dlbm08s6.207.244.226.234.sslip.io"
+      - "caddy_0.handle_path.0_reverse_proxy={{upstreams 8100}}"
+
+networks:
+  coolify:
+    external: true
+    name: coolify
+  supabase:
+    external: true
+    name: wk8c40o0kokcogw4wksc8s48
