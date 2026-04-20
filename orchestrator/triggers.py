@@ -8,6 +8,7 @@ Schedule registration and webhook event dispatching.
 from __future__ import annotations
 
 import logging
+import threading
 import time as _time
 from typing import Any, Dict, List, Optional
 
@@ -17,21 +18,27 @@ logger = logging.getLogger(__name__)
 
 # ── Debounce logic for Gold schema batch syncs ──
 _last_batch_trigger: Dict[str, float] = {}
+_debounce_lock = threading.Lock()
 _DEBOUNCE_SECONDS = 30
 
 
 def _should_debounce(source_table: str) -> bool:
-    """Prevent redundant batch syncs within the debounce window."""
-    now = _time.time()
-    last = _last_batch_trigger.get(source_table, 0)
-    if now - last < _DEBOUNCE_SECONDS:
-        logger.info(
-            "⏳ Debouncing batch sync for %s (%.0fs since last)",
-            source_table, now - last,
-        )
-        return True
-    _last_batch_trigger[source_table] = now
-    return False
+    """Prevent redundant batch syncs within the debounce window.
+
+    Thread-safe: uses a lock to prevent concurrent webhook threads
+    from racing past the check and triggering duplicate batch syncs.
+    """
+    with _debounce_lock:
+        now = _time.time()
+        last = _last_batch_trigger.get(source_table, 0)
+        if now - last < _DEBOUNCE_SECONDS:
+            logger.info(
+                "⏳ Debouncing batch sync for %s (%.0fs since last)",
+                source_table, now - last,
+            )
+            return True
+        _last_batch_trigger[source_table] = now
+        return False
 
 
 # ══════════════════════════════════════════════════════

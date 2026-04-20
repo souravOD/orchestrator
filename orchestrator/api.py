@@ -93,7 +93,7 @@ async def health():
 # Webhook Endpoint (Supabase Database Webhooks)
 # ══════════════════════════════════════════════════════
 
-@app.post("/webhooks/supabase")
+@app.post("/webhooks/supabase", status_code=202)
 async def receive_supabase_webhook(
     request: Request,
     x_webhook_secret: Optional[str] = Header(None, alias="x-webhook-secret"),
@@ -101,12 +101,13 @@ async def receive_supabase_webhook(
     """
     Receive a Supabase database webhook event.
 
-    Supabase sends POST requests with a JSON body containing:
-    - type: INSERT / UPDATE / DELETE
-    - table: table name
-    - schema: schema name
-    - record: the new/updated row
-    - old_record: the previous row (for UPDATE/DELETE)
+    Returns 202 Accepted immediately and processes the event in a
+    background thread.  This is required because pg_net (the PostgreSQL
+    HTTP extension that sends these webhooks) has a 5-second timeout,
+    but batch sync flows take 30-120 seconds.
+
+    If background processing fails, the payload is sent to the
+    dead-letter queue (DLQ) for automatic retry.
     """
     # Verify webhook secret if configured
     if settings.webhook_secret:
@@ -121,12 +122,32 @@ async def receive_supabase_webhook(
         payload.get("table"),
     )
 
+    # Dispatch to background thread — return HTTP response immediately.
+    asyncio.create_task(asyncio.to_thread(_process_webhook_background, payload))
+
+    return {
+        "status": "accepted",
+        "type": payload.get("type"),
+        "table": payload.get("table"),
+    }
+
+
+def _process_webhook_background(payload: Dict[str, Any]) -> None:
+    """
+    Background wrapper for webhook processing with DLQ error handling.
+
+    Runs in a thread pool executor so the HTTP response is not blocked.
+    """
     try:
         result = handle_webhook_event(payload)
-        return {"status": "accepted", "result": _safe_serialise(result)}
+        logger.info(
+            "Webhook processed successfully: %s on %s.%s",
+            payload.get("type"),
+            payload.get("schema"),
+            payload.get("table"),
+        )
     except Exception as exc:
-        logger.error("Webhook processing failed — sending to DLQ: %s", exc)
-        # Insert into dead-letter queue for auto-retry
+        logger.error("Webhook background processing failed — sending to DLQ: %s", exc)
         next_retry = (
             datetime.now(timezone.utc) + timedelta(minutes=1)
         ).isoformat()
@@ -140,7 +161,6 @@ async def receive_supabase_webhook(
             )
         except Exception as dlq_exc:
             logger.error("Failed to insert into DLQ: %s", dlq_exc)
-        raise HTTPException(status_code=500, detail=str(exc))
 
 
 # ══════════════════════════════════════════════════════
@@ -221,9 +241,7 @@ async def trigger_flow(request: TriggerRequest):
             kwargs["source_name"] = source_name
 
         # Dispatch to background thread — API returns immediately.
-        import asyncio
-        loop = asyncio.get_event_loop()
-        loop.run_in_executor(None, lambda: flow_fn(**kwargs))
+        asyncio.create_task(asyncio.to_thread(flow_fn, **kwargs))
 
         return {
             "status": "accepted",
