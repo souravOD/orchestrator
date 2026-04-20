@@ -42,6 +42,7 @@ services:
       - "coolify.managed=true"
       # ── Traefik HTTP Routing ──
       - "traefik.enable=true"
+      - "traefik.docker.network=coolify"
       - "traefik.http.routers.http-0-q6soena53w4b7vy4dlbm08s6.entrypoints=http"
       - "traefik.http.routers.http-0-q6soena53w4b7vy4dlbm08s6.rule=Host(`q6soena53w4b7vy4dlbm08s6.207.244.226.234.sslip.io`)"
       - "traefik.http.routers.http-0-q6soena53w4b7vy4dlbm08s6.service=http-0-q6soena53w4b7vy4dlbm08s6"
