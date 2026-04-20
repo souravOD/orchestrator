@@ -123,9 +123,7 @@ async def receive_supabase_webhook(
     )
 
     # Dispatch to background thread — return HTTP response immediately.
-    # Same pattern used by /api/trigger (line 226).
-    loop = asyncio.get_event_loop()
-    loop.run_in_executor(None, lambda: _process_webhook_background(payload))
+    asyncio.create_task(asyncio.to_thread(_process_webhook_background, payload))
 
     return {
         "status": "accepted",
@@ -243,9 +241,7 @@ async def trigger_flow(request: TriggerRequest):
             kwargs["source_name"] = source_name
 
         # Dispatch to background thread — API returns immediately.
-        import asyncio
-        loop = asyncio.get_event_loop()
-        loop.run_in_executor(None, lambda: flow_fn(**kwargs))
+        asyncio.create_task(asyncio.to_thread(flow_fn, **kwargs))
 
         return {
             "status": "accepted",
