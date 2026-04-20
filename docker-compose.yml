@@ -17,7 +17,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        GITHUB_TOKEN: ${GITHUB_TOKEN}
+        GITHUB_TOKEN: ${GITHUB_TOKEN:-}
     container_name: ${COOLIFY_CONTAINER_NAME:-orchestrator-api}
     restart: unless-stopped
     expose:
