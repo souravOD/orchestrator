@@ -284,9 +284,10 @@ class Neo4jPipelineAdapter:
                             phase_failed = True
 
                     if phase_failed:
+                        # Only report failures from this phase (not prior phases)
+                        recent = sync_result.layer_results[-len(phase_layers):]
                         failed_layers = [
-                            r.layer for r in sync_result.layer_results
-                            if r.status == "failed"
+                            r.layer for r in recent if r.status == "failed"
                         ]
                         sync_result.status = "failed"
                         sync_result.error = (
