@@ -21,6 +21,27 @@ from .triggers import handle_webhook_event
 
 logger = logging.getLogger(__name__)
 
+# ── Non-retryable error patterns ─────────────────────────────
+# Errors matching these patterns are deterministic failures that
+# will NEVER succeed on retry. They are immediately discarded
+# instead of entering the retry loop (fixes DLQ amplification).
+_NON_RETRYABLE_PATTERNS = [
+    "ConcurrentRunError",
+    "already running",
+    "concurrent flow",
+    "address already in use",       # Prefect port conflict
+    "Pipeline import failed",       # Missing module
+    "No module named",              # Import error
+    "handled_by_outbox",            # Gold events (outbox worker handles)
+]
+
+
+def _is_non_retryable(exc: Exception) -> bool:
+    """Return True if the error is deterministic and will never succeed on retry."""
+    msg = str(exc)
+    return any(p.lower() in msg.lower() for p in _NON_RETRYABLE_PATTERNS)
+
+
 # Conservative exponential backoff delays (in minutes)
 _RETRY_DELAYS: list[int] = []
 
@@ -83,6 +104,22 @@ def retry_dead_letters() -> int:
             logger.info("DLQ entry %s resolved on retry #%d", entry_id, retry_count + 1)
 
         except Exception as exc:
+            # ── Non-retryable errors: discard immediately ──
+            if _is_non_retryable(exc):
+                db.update_dead_letter(
+                    entry_id,
+                    status="discarded",
+                    retry_count=retry_count + 1,
+                    error_message=f"Non-retryable: {exc}",
+                )
+                logger.info(
+                    "DLQ entry %s discarded (non-retryable): %s",
+                    entry_id, exc,
+                )
+                processed += 1
+                continue
+
+            # ── Retryable errors: apply backoff or exhaust ──
             new_count = retry_count + 1
             if new_count >= max_retries:
                 # Exhausted all retries

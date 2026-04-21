@@ -138,7 +138,9 @@ class Neo4jPipelineAdapter:
         adapter.run_reconciliation()
     """
 
-    LAYER_ORDER = ["recipes", "ingredients", "products", "customers"]
+    # Dependency-aware layer order (matches PHASE_ORDER in run.py):
+    # Phase 1: ingredients (foundation) → Phase 2: recipes, products (parallel) → Phase 3: customers
+    LAYER_ORDER = ["ingredients", "recipes", "products", "customers"]
 
     def __init__(self) -> None:
         self._pipeline_root = _resolve_pipeline_root()
@@ -215,22 +217,85 @@ class Neo4jPipelineAdapter:
         return result
 
     def run_all_layers(self) -> Neo4jSyncResult:
-        """Run all batch sync layers in order."""
+        """Run all batch sync layers in phased parallel order.
+
+        Phase 1: Ingredients (foundation — no dependencies)
+        Phase 2: Recipes + Products (parallel — depend on Ingredients)
+        Phase 3: Customers (depends on Recipes + Products)
+
+        If any layer in a phase fails, subsequent phases are skipped.
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        PHASES = [
+            ["ingredients"],              # Phase 1
+            ["recipes", "products"],      # Phase 2 (parallel)
+            ["customers"],                # Phase 3
+        ]
+
         sync_result = Neo4jSyncResult()
         start = time.monotonic()
 
-        for layer in self.LAYER_ORDER:
-            layer_result = self.run_batch_sync(layer)
-            sync_result.layers_run.append(layer)
-            sync_result.layer_results.append(layer_result)
+        for phase_idx, phase_layers in enumerate(PHASES, 1):
+            logger.info(
+                "Starting batch sync phase %d: %s", phase_idx, phase_layers,
+            )
 
-            total_fetched = layer_result.tables.get("_total_rows_fetched", 0)
-            sync_result.total_rows_fetched += total_fetched
+            if len(phase_layers) == 1:
+                # Single-layer phase — run directly
+                layer_result = self.run_batch_sync(phase_layers[0])
+                sync_result.layers_run.append(phase_layers[0])
+                sync_result.layer_results.append(layer_result)
+                total_fetched = layer_result.tables.get("_total_rows_fetched", 0)
+                sync_result.total_rows_fetched += total_fetched
 
-            if layer_result.status == "failed":
-                sync_result.status = "failed"
-                sync_result.error = f"Layer {layer} failed: {layer_result.error}"
-                break
+                if layer_result.status == "failed":
+                    sync_result.status = "failed"
+                    sync_result.error = (
+                        f"Phase {phase_idx} layer {phase_layers[0]} "
+                        f"failed: {layer_result.error}"
+                    )
+                    break
+            else:
+                # Multi-layer phase — run in parallel
+                with ThreadPoolExecutor(
+                    max_workers=len(phase_layers),
+                    thread_name_prefix="batch",
+                ) as pool:
+                    futures = {
+                        pool.submit(self.run_batch_sync, layer): layer
+                        for layer in phase_layers
+                    }
+                    phase_failed = False
+                    for future in as_completed(futures):
+                        layer = futures[future]
+                        try:
+                            layer_result = future.result()
+                        except Exception as exc:
+                            layer_result = Neo4jLayerResult(
+                                layer=layer, status="failed", error=str(exc),
+                            )
+                        sync_result.layers_run.append(layer)
+                        sync_result.layer_results.append(layer_result)
+                        total_fetched = layer_result.tables.get("_total_rows_fetched", 0)
+                        sync_result.total_rows_fetched += total_fetched
+
+                        if layer_result.status == "failed":
+                            phase_failed = True
+
+                    if phase_failed:
+                        # Only report failures from this phase (not prior phases)
+                        recent = sync_result.layer_results[-len(phase_layers):]
+                        failed_layers = [
+                            r.layer for r in recent if r.status == "failed"
+                        ]
+                        sync_result.status = "failed"
+                        sync_result.error = (
+                            f"Phase {phase_idx} failed: {failed_layers}"
+                        )
+                        break
+
+            logger.info("Batch sync phase %d completed", phase_idx)
 
         else:
             sync_result.status = "success"

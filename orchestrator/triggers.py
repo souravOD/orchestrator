@@ -158,20 +158,20 @@ def handle_webhook_event(payload: Dict[str, Any]) -> Dict[str, Any]:
             source_schema, source_table, mapped_type,
         )
 
-        # Route Gold schema events to Neo4j batch sync
+        # ── Gold schema: handled by outbox worker, NOT webhooks ──
         if source_schema == "gold":
-            if _should_debounce(source_table):
-                return {"status": "debounced", "table": source_table}
             logger.info(
-                "📡 Gold schema event detected — routing to neo4j_batch_sync"
+                "Gold event handled by outbox worker (webhook ignored): %s.%s (%s)",
+                source_schema, source_table, mapped_type,
             )
-            from .flows import neo4j_batch_sync_flow
-            return neo4j_batch_sync_flow(
-                layer="all",
-                trigger_type="webhook",
-                triggered_by=f"gold.{source_table}",
-            )
+            return {"status": "handled_by_outbox", "table": source_table}
 
+        # ── Non-gold schemas: process but warn about deprecation ──
+        logger.warning(
+            "DEPRECATED: Non-gold webhook received — consider migrating "
+            "to outbox pattern: %s.%s (%s)",
+            source_schema, source_table, mapped_type,
+        )
         from .flows import realtime_event_flow
         return realtime_event_flow(
             event_type=mapped_type,

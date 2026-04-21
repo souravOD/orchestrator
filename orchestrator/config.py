@@ -47,6 +47,9 @@ class OrchestratorSettings(BaseSettings):
     neo4j_password: str = ""
     neo4j_database: str = "neo4j"
     neo4j_realtime_poll_interval: int = 5  # seconds
+    neo4j_realtime_workers: int = 3         # parallel outbox worker threads
+    neo4j_worker_batch_size: int = 50       # events claimed per worker per poll cycle
+    neo4j_worker_lock_timeout: int = 300    # stale lock recovery (seconds)
 
     # ── Agentic schema drift ─────────────────────────
     agent_llm_model: str = "gpt-4.1-mini"

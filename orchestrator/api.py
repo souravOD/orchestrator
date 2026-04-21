@@ -49,27 +49,57 @@ async def _start_dlq_worker():
 
 
 @app.on_event("startup")
-async def _start_realtime_worker():
-    """Auto-start the Neo4j realtime outbox poller if enabled."""
+async def _start_realtime_workers():
+    """Auto-start N parallel outbox workers if enabled.
+
+    Each worker runs as an independent daemon thread, claiming events
+    via SELECT FOR UPDATE SKIP LOCKED — no coordination needed.
+
+    Scale by changing NEO4J_REALTIME_WORKERS env var (default: 3).
+    """
     import os
-    if os.getenv("NEO4J_REALTIME_AUTOSTART", "true").lower() == "true":
-        import threading
+    import threading
 
-        def _run_worker():
-            try:
-                from .neo4j_adapter import Neo4jPipelineAdapter
-                adapter = Neo4jPipelineAdapter()
-                adapter.start_realtime_worker()
-            except Exception as exc:
-                logger.error("Realtime worker crashed: %s", exc, exc_info=True)
+    if os.getenv("NEO4J_REALTIME_AUTOSTART", "true").lower() != "true":
+        logger.info("Realtime workers disabled (NEO4J_REALTIME_AUTOSTART=false)")
+        return
 
+    worker_count = int(os.getenv("NEO4J_REALTIME_WORKERS", "3"))
+    batch_size = int(os.getenv("NEO4J_WORKER_BATCH_SIZE", "50"))
+    poll_interval = int(os.getenv("NEO4J_REALTIME_POLL_INTERVAL", "5"))
+    lock_timeout = int(os.getenv("NEO4J_WORKER_LOCK_TIMEOUT", "300"))
+    hostname = os.getenv("HOSTNAME", "orch")[:8]
+
+    def _run_worker(worker_id: str):
+        try:
+            from .neo4j_adapter import _ensure_pipeline_importable
+            _ensure_pipeline_importable()
+            from services.customer_realtime.service import OutboxWorker
+            worker = OutboxWorker(
+                worker_id=worker_id,
+                batch_size=batch_size,
+                poll_interval=poll_interval,
+                lock_timeout=lock_timeout,
+            )
+            worker.run_loop()
+        except Exception as exc:
+            logger.error("Worker %s crashed: %s", worker_id, exc, exc_info=True)
+
+    for i in range(worker_count):
+        worker_id = f"w-{hostname}-{i:02d}"
         thread = threading.Thread(
-            target=_run_worker, name="realtime-worker", daemon=True,
+            target=_run_worker,
+            args=(worker_id,),
+            name=f"outbox-worker-{i}",
+            daemon=True,
         )
         thread.start()
-        logger.info("🔴 Realtime worker auto-started (daemon thread)")
-    else:
-        logger.info("Realtime worker auto-start disabled (NEO4J_REALTIME_AUTOSTART=false)")
+        logger.info("🟢 Outbox worker started: %s", worker_id)
+
+    logger.info(
+        "🔴 %d outbox workers launched (batch_size=%d, poll=%ds, lock_timeout=%ds)",
+        worker_count, batch_size, poll_interval, lock_timeout,
+    )
 
 
 app.add_middleware(
@@ -147,6 +177,18 @@ def _process_webhook_background(payload: Dict[str, Any]) -> None:
             payload.get("table"),
         )
     except Exception as exc:
+        # ── Non-retryable errors: don't pollute the DLQ ──
+        exc_str = str(exc)
+        if any(p in exc_str for p in (
+            "ConcurrentRunError", "already running", "concurrent flow",
+            "handled_by_outbox",
+        )):
+            logger.info(
+                "Webhook skipped (non-retryable, not sent to DLQ): %s.%s — %s",
+                payload.get("schema"), payload.get("table"), exc,
+            )
+            return
+
         logger.error("Webhook background processing failed — sending to DLQ: %s", exc)
         next_retry = (
             datetime.now(timezone.utc) + timedelta(minutes=1)
