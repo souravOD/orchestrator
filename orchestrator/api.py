@@ -582,6 +582,51 @@ async def neo4j_reconciliation_status():
     return {"latest_runs": recon_runs[:3]}
 
 
+@app.post("/api/neo4j/embeddings")
+async def trigger_embedding_backfill():
+    """Trigger a semantic embedding backfill pass."""
+    from .flows import neo4j_embedding_backfill_flow
+    try:
+        result = neo4j_embedding_backfill_flow(
+            trigger_type="api",
+            triggered_by="api:/api/neo4j/embeddings",
+        )
+        return {"status": "completed", "result": _safe_serialise(result)}
+    except Exception as exc:
+        logger.error("Embedding backfill trigger failed: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/api/neo4j/graphsage/retrain")
+async def trigger_graphsage_retrain():
+    """Trigger a GraphSAGE model retraining."""
+    from .flows import neo4j_graphsage_retrain_flow
+    try:
+        result = neo4j_graphsage_retrain_flow(
+            trigger_type="api",
+            triggered_by="api:/api/neo4j/graphsage/retrain",
+        )
+        return {"status": "completed", "result": _safe_serialise(result)}
+    except Exception as exc:
+        logger.error("GraphSAGE retrain trigger failed: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/api/neo4j/graphsage/inference")
+async def trigger_graphsage_inference():
+    """Trigger GraphSAGE inference for new nodes."""
+    from .flows import neo4j_graphsage_inference_flow
+    try:
+        result = neo4j_graphsage_inference_flow(
+            trigger_type="api",
+            triggered_by="api:/api/neo4j/graphsage/inference",
+        )
+        return {"status": "completed", "result": _safe_serialise(result)}
+    except Exception as exc:
+        logger.error("GraphSAGE inference trigger failed: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 # ══════════════════════════════════════════════════════
 # Alert Endpoints
 # ══════════════════════════════════════════════════════

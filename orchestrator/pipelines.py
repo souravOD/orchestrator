@@ -1152,3 +1152,283 @@ def run_gold_to_neo4j_realtime(
         logger.error("❌ Neo4j realtime worker FAILED: %s", exc)
         raise
 
+
+# ══════════════════════════════════════════════════════
+# Task 7: Embedding Backfill
+# ══════════════════════════════════════════════════════
+
+@task(name="gold_to_neo4j_embedding_backfill", retries=1, retry_delay_seconds=60)
+def run_gold_to_neo4j_embedding_backfill(
+    orchestration_run_id: str,
+    trigger_type: str = "scheduled",
+    triggered_by: Optional[str] = None,
+    config: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Run the embedding backfill service to generate missing semantic embeddings.
+    """
+    cfg = config or {}
+    start = time.time()
+
+    _check_cancellation(orchestration_run_id)
+
+    pipeline_run = db.create_pipeline_run(
+        pipeline_name="gold_to_neo4j",
+        orchestration_run_id=orchestration_run_id,
+        trigger_type=trigger_type,
+        triggered_by=triggered_by,
+        source_table="neo4j.*",
+        target_table="neo4j.*.semanticEmbedding",
+        run_config={"mode": "embedding_backfill"},
+    )
+    run_id = pipeline_run["id"]
+    db.update_orchestration_run(orchestration_run_id, current_layer="embedding_backfill")
+
+    try:
+        from .neo4j_adapter import Neo4jPipelineAdapter
+
+        adapter = Neo4jPipelineAdapter()
+        result = adapter.run_embedding_backfill()
+
+        status = "completed" if result.get("status") != "failed" else "failed"
+        db.update_pipeline_run(
+            run_id,
+            status=status,
+            records_written=result.get("total_backfilled", 0),
+            completed_at=db._utcnow(),
+            duration_seconds=_calculate_duration(start),
+            error_message=result.get("error"),
+        )
+
+        if status == "failed":
+            try:
+                from .alerts import send_alert
+                send_alert(
+                    title="Embedding backfill failed",
+                    message=str(result.get("error", "Unknown")),
+                    severity="warning",
+                    pipeline_name="gold_to_neo4j",
+                    run_id=str(run_id),
+                )
+            except Exception:
+                pass
+            logger.error("❌ Embedding backfill FAILED: %s", result.get("error"))
+        else:
+            logger.info(
+                "✅ Embedding backfill completed: %d nodes",
+                result.get("total_backfilled", 0),
+            )
+
+        return result
+
+    except Exception as exc:
+        db.update_pipeline_run(
+            run_id,
+            status="failed",
+            completed_at=db._utcnow(),
+            duration_seconds=_calculate_duration(start),
+            error_message=str(exc),
+            error_details={"traceback": traceback.format_exc()},
+        )
+        try:
+            from .alerts import send_alert
+            send_alert(
+                title="Embedding backfill exception",
+                message=str(exc),
+                severity="critical",
+                pipeline_name="gold_to_neo4j",
+                run_id=str(run_id),
+            )
+        except Exception:
+            pass
+        logger.error("❌ Embedding backfill FAILED: %s", exc)
+        raise
+
+
+# ══════════════════════════════════════════════════════
+# Task 8: GraphSAGE Retraining
+# ══════════════════════════════════════════════════════
+
+@task(name="gold_to_neo4j_graphsage_retrain", retries=0)
+def run_gold_to_neo4j_graphsage_retrain(
+    orchestration_run_id: str,
+    trigger_type: str = "scheduled",
+    triggered_by: Optional[str] = None,
+    config: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Run the GraphSAGE retraining service (every 3 days).
+    """
+    cfg = config or {}
+    start = time.time()
+
+    _check_cancellation(orchestration_run_id)
+
+    pipeline_run = db.create_pipeline_run(
+        pipeline_name="gold_to_neo4j",
+        orchestration_run_id=orchestration_run_id,
+        trigger_type=trigger_type,
+        triggered_by=triggered_by,
+        source_table="neo4j.*",
+        target_table="neo4j.*.graphSageEmbedding",
+        run_config={"mode": "graphsage_retrain"},
+    )
+    run_id = pipeline_run["id"]
+    db.update_orchestration_run(orchestration_run_id, current_layer="graphsage_retrain")
+
+    try:
+        from .neo4j_adapter import Neo4jPipelineAdapter
+
+        adapter = Neo4jPipelineAdapter()
+        result = adapter.run_graphsage_retrain()
+
+        status = "completed" if result.get("status") == "success" else "failed"
+        db.update_pipeline_run(
+            run_id,
+            status=status,
+            completed_at=db._utcnow(),
+            duration_seconds=_calculate_duration(start),
+            error_message=result.get("error") if status == "failed" else None,
+        )
+
+        if status == "failed":
+            errors = result.get("errors", [])
+            error_msg = errors[0].get("error", "Unknown") if errors else "Unknown"
+            try:
+                from .alerts import send_alert
+                send_alert(
+                    title="GraphSAGE retrain failed",
+                    message=error_msg,
+                    severity="warning",
+                    pipeline_name="gold_to_neo4j",
+                    run_id=str(run_id),
+                )
+            except Exception:
+                pass
+            logger.error("❌ GraphSAGE retrain FAILED: %s", error_msg)
+        else:
+            logger.info(
+                "✅ GraphSAGE retrain completed in %dms",
+                result.get("duration_ms", 0),
+            )
+
+        return result
+
+    except Exception as exc:
+        db.update_pipeline_run(
+            run_id,
+            status="failed",
+            completed_at=db._utcnow(),
+            duration_seconds=_calculate_duration(start),
+            error_message=str(exc),
+            error_details={"traceback": traceback.format_exc()},
+        )
+        try:
+            from .alerts import send_alert
+            send_alert(
+                title="GraphSAGE retrain exception",
+                message=str(exc),
+                severity="critical",
+                pipeline_name="gold_to_neo4j",
+                run_id=str(run_id),
+            )
+        except Exception:
+            pass
+        logger.error("❌ GraphSAGE retrain FAILED: %s", exc)
+        raise
+
+
+# ══════════════════════════════════════════════════════
+# Task 9: GraphSAGE Inference (Incremental)
+# ══════════════════════════════════════════════════════
+
+@task(name="gold_to_neo4j_graphsage_inference", retries=1, retry_delay_seconds=60)
+def run_gold_to_neo4j_graphsage_inference(
+    orchestration_run_id: str,
+    trigger_type: str = "scheduled",
+    triggered_by: Optional[str] = None,
+    config: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Run GraphSAGE inference for new nodes using the trained model (every 6 hours).
+    """
+    cfg = config or {}
+    start = time.time()
+
+    _check_cancellation(orchestration_run_id)
+
+    pipeline_run = db.create_pipeline_run(
+        pipeline_name="gold_to_neo4j",
+        orchestration_run_id=orchestration_run_id,
+        trigger_type=trigger_type,
+        triggered_by=triggered_by,
+        source_table="neo4j.*",
+        target_table="neo4j.*.graphSageEmbedding",
+        run_config={"mode": "graphsage_inference"},
+    )
+    run_id = pipeline_run["id"]
+    db.update_orchestration_run(orchestration_run_id, current_layer="graphsage_inference")
+
+    try:
+        from .neo4j_adapter import Neo4jPipelineAdapter
+
+        adapter = Neo4jPipelineAdapter()
+        result = adapter.run_graphsage_inference()
+
+        # "skipped" is treated as success (model not loaded yet)
+        is_failure = result.get("status") == "failed"
+        status = "failed" if is_failure else "completed"
+
+        db.update_pipeline_run(
+            run_id,
+            status=status,
+            records_written=result.get("nodes_inferred", 0),
+            completed_at=db._utcnow(),
+            duration_seconds=_calculate_duration(start),
+            error_message=result.get("error") if is_failure else None,
+        )
+
+        if is_failure:
+            try:
+                from .alerts import send_alert
+                send_alert(
+                    title="GraphSAGE inference failed",
+                    message=str(result.get("error", "Unknown")),
+                    severity="warning",
+                    pipeline_name="gold_to_neo4j",
+                    run_id=str(run_id),
+                )
+            except Exception:
+                pass
+            logger.error("❌ GraphSAGE inference FAILED: %s", result.get("error"))
+        else:
+            logger.info(
+                "✅ GraphSAGE inference completed: status=%s, nodes=%d",
+                result.get("status", "?"),
+                result.get("nodes_inferred", 0),
+            )
+
+        return result
+
+    except Exception as exc:
+        db.update_pipeline_run(
+            run_id,
+            status="failed",
+            completed_at=db._utcnow(),
+            duration_seconds=_calculate_duration(start),
+            error_message=str(exc),
+            error_details={"traceback": traceback.format_exc()},
+        )
+        try:
+            from .alerts import send_alert
+            send_alert(
+                title="GraphSAGE inference exception",
+                message=str(exc),
+                severity="critical",
+                pipeline_name="gold_to_neo4j",
+                run_id=str(run_id),
+            )
+        except Exception:
+            pass
+        logger.error("❌ GraphSAGE inference FAILED: %s", exc)
+        raise

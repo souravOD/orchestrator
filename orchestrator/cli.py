@@ -263,6 +263,46 @@ def cmd_neo4j(args):
             trigger_type="manual",
             triggered_by="cli",
         )
+
+    elif args.neo4j_action == "backfill":
+        from .flows import neo4j_embedding_backfill_flow
+        print("🚀 Running embedding backfill")
+        result = neo4j_embedding_backfill_flow(
+            trigger_type="manual",
+            triggered_by="cli",
+        )
+        print(f"✅ Embedding backfill completed.")
+        if isinstance(result, dict):
+            print(f"   Labels checked: {result.get('labels_checked', '?')}")
+            print(f"   Nodes backfilled: {result.get('total_backfilled', '?')}")
+
+    elif args.neo4j_action == "graphsage-retrain":
+        from .flows import neo4j_graphsage_retrain_flow
+        print("🚀 Running GraphSAGE retraining")
+        result = neo4j_graphsage_retrain_flow(
+            trigger_type="manual",
+            triggered_by="cli",
+        )
+        print(f"✅ GraphSAGE retrain completed.")
+        if isinstance(result, dict):
+            print(f"   Status: {result.get('status', '?')}")
+            print(f"   Model: {result.get('model_name', '?')}")
+            print(f"   Duration: {result.get('duration_ms', '?')}ms")
+
+    elif args.neo4j_action == "graphsage-inference":
+        from .flows import neo4j_graphsage_inference_flow
+        print("🚀 Running GraphSAGE inference for new nodes")
+        result = neo4j_graphsage_inference_flow(
+            trigger_type="manual",
+            triggered_by="cli",
+        )
+        print(f"✅ GraphSAGE inference completed.")
+        if isinstance(result, dict):
+            print(f"   Status: {result.get('status', '?')}")
+            print(f"   Nodes inferred: {result.get('nodes_inferred', '?')}")
+            print(f"   Total missing: {result.get('total_missing', '?')}")
+            print(f"   Duration: {result.get('duration_ms', '?')}ms")
+
     else:
         print(f"❌ Unknown neo4j action: {args.neo4j_action}")
         sys.exit(1)
@@ -342,6 +382,9 @@ def main():
 
     neo4j_sub.add_parser("reconcile", help="Run reconciliation check")
     neo4j_sub.add_parser("realtime", help="Start realtime outbox poller")
+    neo4j_sub.add_parser("backfill", help="Run semantic embedding backfill")
+    neo4j_sub.add_parser("graphsage-retrain", help="Retrain GraphSAGE structural embeddings")
+    neo4j_sub.add_parser("graphsage-inference", help="Infer structural embeddings for new nodes")
     neo4j_parser.set_defaults(func=cmd_neo4j)
 
     # ── alerts ──

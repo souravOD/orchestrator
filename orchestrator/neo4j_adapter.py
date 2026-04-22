@@ -357,6 +357,103 @@ class Neo4jPipelineAdapter:
             logger.error("Could not import customer_realtime: %s", exc)
             raise
 
+    # ── Embedding Backfill ─────────────────────────────
+
+    def run_embedding_backfill(self) -> Dict[str, Any]:
+        """
+        Run the embedding backfill service to generate missing
+        semantic embeddings across all configured labels.
+        """
+        _ensure_pipeline_importable()
+
+        try:
+            from services.embedding_backfill.service import EmbeddingBackfillService
+
+            logger.info("Starting embedding backfill")
+            service = EmbeddingBackfillService()
+            try:
+                result = service.run_once()
+            finally:
+                service.close()
+            logger.info(
+                "Embedding backfill completed: %d nodes",
+                result.get("total_backfilled", 0),
+            )
+            return result
+
+        except ImportError as exc:
+            logger.error("Could not import embedding_backfill service: %s", exc)
+            return {"status": "failed", "error": f"Import failed: {exc}"}
+
+        except Exception as exc:
+            logger.error("Embedding backfill failed: %s", exc, exc_info=True)
+            return {"status": "failed", "error": str(exc)}
+
+    # ── GraphSAGE Retraining ──────────────────────────
+
+    def run_graphsage_retrain(self) -> Dict[str, Any]:
+        """
+        Run the GraphSAGE retraining service to regenerate
+        structural embeddings across all nodes.
+        """
+        _ensure_pipeline_importable()
+
+        try:
+            from services.graphsage_retrain.service import GraphSageRetrainService
+
+            logger.info("Starting GraphSAGE retraining")
+            service = GraphSageRetrainService()
+            try:
+                result = service.run_once()
+            finally:
+                service.close()
+            logger.info(
+                "GraphSAGE retrain completed: status=%s",
+                result.get("status", "unknown"),
+            )
+            return result
+
+        except ImportError as exc:
+            logger.error("Could not import graphsage_retrain service: %s", exc)
+            return {"status": "failed", "error": f"Import failed: {exc}"}
+
+        except Exception as exc:
+            logger.error("GraphSAGE retrain failed: %s", exc, exc_info=True)
+            return {"status": "failed", "error": str(exc)}
+
+    # ── GraphSAGE Inference (Incremental) ────────────
+
+    def run_graphsage_inference(self) -> Dict[str, Any]:
+        """
+        Run GraphSAGE inference for new nodes using the
+        trained model kept in GDS Catalog.
+        """
+        _ensure_pipeline_importable()
+
+        try:
+            from services.graphsage_inference.service import GraphSageInferenceService
+
+            logger.info("Starting GraphSAGE inference for new nodes")
+            service = GraphSageInferenceService()
+            try:
+                result = service.run_once()
+            finally:
+                service.close()
+            logger.info(
+                "GraphSAGE inference completed: status=%s, nodes=%d",
+                result.get("status", "unknown"),
+                result.get("nodes_inferred", 0),
+            )
+            return result
+
+        except ImportError as exc:
+            logger.error("Could not import graphsage_inference service: %s", exc)
+            return {"status": "failed", "error": f"Import failed: {exc}"}
+
+        except Exception as exc:
+            logger.error("GraphSAGE inference failed: %s", exc, exc_info=True)
+            return {"status": "failed", "error": str(exc)}
+
     # ── Summary Parsing ───────────────────────────────
 
     def _parse_latest_summary(self, layer: str) -> Optional[Dict[str, Any]]:
