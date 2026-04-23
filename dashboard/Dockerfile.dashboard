@@ -1,0 +1,46 @@
+# syntax=docker/dockerfile:1
+# ═══════════════════════════════════════════════════════
+# Orchestrator Dashboard — Multi-Stage Production Build
+# ═══════════════════════════════════════════════════════
+# Builds the Next.js 16 dashboard in standalone mode for
+# minimal footprint (~15 MB vs full node_modules).
+#
+# Build args (NEXT_PUBLIC_*) are baked into the JS bundle
+# at build time — they MUST be provided as build args,
+# not runtime env vars.
+
+# ── Stage 1: Install Dependencies ─────────────────────
+FROM node:20-alpine AS deps
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --ignore-scripts
+
+# ── Stage 2: Build ────────────────────────────────────
+FROM node:20-alpine AS builder
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+
+# Build-time env vars (NEXT_PUBLIC_* are baked into the JS bundle)
+ARG NEXT_PUBLIC_API_BASE_URL
+ARG NEXT_PUBLIC_SUPABASE_URL
+ARG NEXT_PUBLIC_SUPABASE_ANON_KEY
+ENV NEXT_PUBLIC_API_BASE_URL=$NEXT_PUBLIC_API_BASE_URL
+ENV NEXT_PUBLIC_SUPABASE_URL=$NEXT_PUBLIC_SUPABASE_URL
+ENV NEXT_PUBLIC_SUPABASE_ANON_KEY=$NEXT_PUBLIC_SUPABASE_ANON_KEY
+
+RUN npm run build
+
+# ── Stage 3: Production Runtime (standalone) ──────────
+FROM node:20-alpine AS runner
+WORKDIR /app
+ENV NODE_ENV=production
+
+# Copy only what's needed for `next start` in standalone mode
+COPY --from=builder /app/public ./public
+COPY --from=builder /app/.next/standalone ./
+COPY --from=builder /app/.next/static ./.next/static
+
+EXPOSE 3000
+
+CMD ["node", "server.js"]
