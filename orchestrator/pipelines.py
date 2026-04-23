@@ -1282,18 +1282,23 @@ def run_gold_to_neo4j_graphsage_retrain(
         adapter = Neo4jPipelineAdapter()
         result = adapter.run_graphsage_retrain()
 
-        status = "completed" if result.get("status") == "success" else "failed"
+        # Treat any non-"failed" status as completed (matches inference task pattern)
+        is_failure = result.get("status") == "failed"
+        status = "failed" if is_failure else "completed"
         db.update_pipeline_run(
             run_id,
             status=status,
             completed_at=db._utcnow(),
             duration_seconds=_calculate_duration(start),
-            error_message=result.get("error") if status == "failed" else None,
+            error_message=result.get("error") if is_failure else None,
         )
 
-        if status == "failed":
+        if is_failure:
             errors = result.get("errors", [])
-            error_msg = errors[0].get("error", "Unknown") if errors else "Unknown"
+            error_msg = (
+                result.get("error")
+                or (errors[0].get("error", "Unknown") if errors else "Unknown")
+            )
             try:
                 from .alerts import send_alert
                 send_alert(
