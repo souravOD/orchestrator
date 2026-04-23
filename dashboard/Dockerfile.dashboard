@@ -36,11 +36,15 @@ FROM node:20-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 
+# Non-root user for security hardening
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+
 # Copy only what's needed for `next start` in standalone mode
-COPY --from=builder /app/public ./public
-COPY --from=builder /app/.next/standalone ./
-COPY --from=builder /app/.next/static ./.next/static
+COPY --from=builder --chown=appuser:appgroup /app/public ./public
+COPY --from=builder --chown=appuser:appgroup /app/.next/standalone ./
+COPY --from=builder --chown=appuser:appgroup /app/.next/static ./.next/static
 
 EXPOSE 3000
 
+USER appuser
 CMD ["node", "server.js"]

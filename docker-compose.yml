@@ -65,7 +65,7 @@ services:
       context: ./dashboard
       dockerfile: Dockerfile.dashboard
       args:
-        NEXT_PUBLIC_API_BASE_URL: https://q6soena53w4b7vy4dlbm08s6.207.244.226.234.sslip.io
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-https://q6soena53w4b7vy4dlbm08s6.207.244.226.234.sslip.io}
         NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL:-http://supabasekong-wk8c40o0kokcogw4wksc8s48.207.244.226.234.sslip.io}
         NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY:-}
     container_name: orchestrator-dashboard
