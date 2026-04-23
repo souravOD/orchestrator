@@ -38,7 +38,7 @@ ENV NODE_ENV=production
 # Force Next.js standalone server to bind to all interfaces
 # Without this, it binds to the container IP, breaking healthchecks and Traefik routing
 ENV HOSTNAME=0.0.0.0
-ENV PORT=3000
+ENV PORT=3005
 
 # Non-root user for security hardening
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
@@ -48,7 +48,7 @@ COPY --from=builder --chown=appuser:appgroup /app/public ./public
 COPY --from=builder --chown=appuser:appgroup /app/.next/standalone ./
 COPY --from=builder --chown=appuser:appgroup /app/.next/static ./.next/static
 
-EXPOSE 3000
+EXPOSE 3005
 
 USER appuser
 CMD ["node", "server.js"]
