@@ -92,15 +92,6 @@ services:
       - "traefik.http.routers.http-dashboard-0.rule=Host(`orchestrator-ui.207.244.226.234.sslip.io`)"
       - "traefik.http.routers.http-dashboard-0.service=http-dashboard-0"
       - "traefik.http.services.http-dashboard-0.loadbalancer.server.port=3000"
-      # ── Traefik HTTPS Routing ──
-      - "traefik.http.routers.https-dashboard-0.entrypoints=https"
-      - "traefik.http.routers.https-dashboard-0.rule=Host(`orchestrator-ui.207.244.226.234.sslip.io`)"
-      - "traefik.http.routers.https-dashboard-0.service=http-dashboard-0"
-      - "traefik.http.routers.https-dashboard-0.tls=true"
-      - "traefik.http.routers.https-dashboard-0.tls.certresolver=letsencrypt"
-      # ── Caddy Fallback ──
-      - "caddy_1=http://orchestrator-ui.207.244.226.234.sslip.io"
-      - "caddy_1.handle_path.0_reverse_proxy={{upstreams 3000}}"
 
 networks:
   coolify:
