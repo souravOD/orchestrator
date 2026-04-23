@@ -876,18 +876,24 @@ def neo4j_embedding_backfill_flow(
             triggered_by=triggered_by,
             config=config,
         )
+
+        # Propagate task-level failure to orchestration run
+        is_failure = result.get("status") == "failed"
+        orch_status = "failed" if is_failure else "completed"
         db.update_orchestration_run(
             orch_run_id,
-            status="completed",
+            status=orch_status,
             total_records_written=result.get("total_backfilled", 0),
+            total_errors=len(result.get("errors", [])) if is_failure else 0,
             completed_at=db._utcnow(),
             duration_seconds=time.time() - start,
         )
-        _send_success_notification(
-            "neo4j_embedding_backfill", orch_run_id,
-            time.time() - start,
-            backfilled=result.get("total_backfilled", 0),
-        )
+        if not is_failure:
+            _send_success_notification(
+                "neo4j_embedding_backfill", orch_run_id,
+                time.time() - start,
+                backfilled=result.get("total_backfilled", 0),
+            )
         return result
 
     except Exception as exc:
@@ -933,17 +939,23 @@ def neo4j_graphsage_retrain_flow(
             triggered_by=triggered_by,
             config=config,
         )
+
+        # Propagate task-level failure to orchestration run
+        is_failure = result.get("status") == "failed"
+        orch_status = "failed" if is_failure else "completed"
         db.update_orchestration_run(
             orch_run_id,
-            status="completed",
+            status=orch_status,
+            total_errors=1 if is_failure else 0,
             completed_at=db._utcnow(),
             duration_seconds=time.time() - start,
         )
-        _send_success_notification(
-            "neo4j_graphsage_retrain", orch_run_id,
-            time.time() - start,
-            model=result.get("model_name"),
-        )
+        if not is_failure:
+            _send_success_notification(
+                "neo4j_graphsage_retrain", orch_run_id,
+                time.time() - start,
+                model=result.get("model_name"),
+            )
         return result
 
     except Exception as exc:
@@ -989,17 +1001,23 @@ def neo4j_graphsage_inference_flow(
             triggered_by=triggered_by,
             config=config,
         )
+
+        # Propagate task-level failure to orchestration run
+        is_failure = result.get("status") == "failed"
+        orch_status = "failed" if is_failure else "completed"
         db.update_orchestration_run(
             orch_run_id,
-            status="completed",
+            status=orch_status,
+            total_errors=1 if is_failure else 0,
             completed_at=db._utcnow(),
             duration_seconds=time.time() - start,
         )
-        _send_success_notification(
-            "neo4j_graphsage_inference", orch_run_id,
-            time.time() - start,
-            nodes_inferred=result.get("nodes_inferred", 0),
-        )
+        if not is_failure:
+            _send_success_notification(
+                "neo4j_graphsage_inference", orch_run_id,
+                time.time() - start,
+                nodes_inferred=result.get("nodes_inferred", 0),
+            )
         return result
 
     except Exception as exc:
