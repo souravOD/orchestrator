@@ -13,6 +13,13 @@
 -- COALESCE ensures single-instance flows (source_name IS NULL) are still
 -- protected, while per-source flows (e.g. full_ingestion) can run in
 -- parallel for different sources.
+-- Clean up any stale 'running' rows left by crashes before creating
+-- the unique index (otherwise CREATE UNIQUE INDEX will fail if duplicates exist).
+UPDATE orchestration.orchestration_runs
+SET status = 'failed', error_message = 'Marked stale by concurrent_run_guard migration'
+WHERE status = 'running'
+  AND started_at < now() - INTERVAL '6 hours';
+
 DROP INDEX IF EXISTS orchestration.idx_orch_runs_single_running;
 
 CREATE UNIQUE INDEX idx_orch_runs_single_running
