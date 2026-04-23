@@ -34,6 +34,9 @@ from .pipelines import (
     PipelineTimeoutError,
     run_bronze_to_silver,
     run_gold_to_neo4j_batch,
+    run_gold_to_neo4j_embedding_backfill,
+    run_gold_to_neo4j_graphsage_inference,
+    run_gold_to_neo4j_graphsage_retrain,
     run_gold_to_neo4j_realtime,
     run_gold_to_neo4j_reconciliation,
     run_prebronze_to_bronze,
@@ -842,6 +845,196 @@ def multi_source_ingestion_flow(
 # Flow Registry (for dispatching by name)
 # ══════════════════════════════════════════════════════
 
+# ══════════════════════════════════════════════════════
+# Flow 8: Embedding Backfill
+# ══════════════════════════════════════════════════════
+
+@flow(name="neo4j_embedding_backfill", retries=0)
+def neo4j_embedding_backfill_flow(
+    trigger_type: str = "scheduled",
+    triggered_by: Optional[str] = None,
+    config: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Embedding backfill — finds and fills missing semantic embeddings."""
+    _guard_concurrent("neo4j_embedding_backfill")
+
+    orch_run = db.create_orchestration_run(
+        flow_name="neo4j_embedding_backfill",
+        trigger_type=trigger_type,
+        triggered_by=triggered_by,
+        flow_type="batch",
+        layers=["embedding_backfill"],
+        config=config,
+    )
+    orch_run_id = orch_run["id"]
+    start = time.time()
+
+    try:
+        result = run_gold_to_neo4j_embedding_backfill(
+            orchestration_run_id=orch_run_id,
+            trigger_type=trigger_type,
+            triggered_by=triggered_by,
+            config=config,
+        )
+
+        # Propagate task-level failure to orchestration run
+        is_failure = result.get("status") == "failed"
+        orch_status = "failed" if is_failure else "completed"
+        db.update_orchestration_run(
+            orch_run_id,
+            status=orch_status,
+            total_records_written=result.get("total_backfilled", 0),
+            total_errors=max(1, len(result.get("errors", []))) if is_failure else 0,
+            completed_at=db._utcnow(),
+            duration_seconds=time.time() - start,
+        )
+        if not is_failure:
+            _send_success_notification(
+                "neo4j_embedding_backfill", orch_run_id,
+                time.time() - start,
+                backfilled=result.get("total_backfilled", 0),
+            )
+        return result
+
+    except Exception as exc:
+        db.update_orchestration_run(
+            orch_run_id,
+            status="failed",
+            total_errors=1,
+            completed_at=db._utcnow(),
+            duration_seconds=time.time() - start,
+        )
+        raise
+
+
+# ══════════════════════════════════════════════════════
+# Flow 9: GraphSAGE Retraining
+# ══════════════════════════════════════════════════════
+
+@flow(name="neo4j_graphsage_retrain", retries=0)
+def neo4j_graphsage_retrain_flow(
+    trigger_type: str = "scheduled",
+    triggered_by: Optional[str] = None,
+    config: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """GraphSAGE model retraining (every 3 days)."""
+    _guard_concurrent("neo4j_graphsage_retrain")
+    _guard_concurrent("neo4j_graphsage_inference")  # mutual exclusion
+
+    orch_run = db.create_orchestration_run(
+        flow_name="neo4j_graphsage_retrain",
+        trigger_type=trigger_type,
+        triggered_by=triggered_by,
+        flow_type="batch",
+        layers=["graphsage_retrain"],
+        config=config,
+    )
+    orch_run_id = orch_run["id"]
+    start = time.time()
+
+    try:
+        result = run_gold_to_neo4j_graphsage_retrain(
+            orchestration_run_id=orch_run_id,
+            trigger_type=trigger_type,
+            triggered_by=triggered_by,
+            config=config,
+        )
+
+        # Propagate task-level failure to orchestration run
+        is_failure = result.get("status") == "failed"
+        orch_status = "failed" if is_failure else "completed"
+        db.update_orchestration_run(
+            orch_run_id,
+            status=orch_status,
+            total_errors=1 if is_failure else 0,
+            completed_at=db._utcnow(),
+            duration_seconds=time.time() - start,
+        )
+        if not is_failure:
+            _send_success_notification(
+                "neo4j_graphsage_retrain", orch_run_id,
+                time.time() - start,
+                model=result.get("model_name"),
+            )
+        return result
+
+    except Exception as exc:
+        db.update_orchestration_run(
+            orch_run_id,
+            status="failed",
+            total_errors=1,
+            completed_at=db._utcnow(),
+            duration_seconds=time.time() - start,
+        )
+        raise
+
+
+# ══════════════════════════════════════════════════════
+# Flow 10: GraphSAGE Incremental Inference
+# ══════════════════════════════════════════════════════
+
+@flow(name="neo4j_graphsage_inference", retries=0)
+def neo4j_graphsage_inference_flow(
+    trigger_type: str = "scheduled",
+    triggered_by: Optional[str] = None,
+    config: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """GraphSAGE incremental inference for new nodes (every 6 hours)."""
+    _guard_concurrent("neo4j_graphsage_inference")
+    _guard_concurrent("neo4j_graphsage_retrain")  # mutual exclusion
+
+    orch_run = db.create_orchestration_run(
+        flow_name="neo4j_graphsage_inference",
+        trigger_type=trigger_type,
+        triggered_by=triggered_by,
+        flow_type="batch",
+        layers=["graphsage_inference"],
+        config=config,
+    )
+    orch_run_id = orch_run["id"]
+    start = time.time()
+
+    try:
+        result = run_gold_to_neo4j_graphsage_inference(
+            orchestration_run_id=orch_run_id,
+            trigger_type=trigger_type,
+            triggered_by=triggered_by,
+            config=config,
+        )
+
+        # Propagate task-level failure to orchestration run
+        is_failure = result.get("status") == "failed"
+        orch_status = "failed" if is_failure else "completed"
+        db.update_orchestration_run(
+            orch_run_id,
+            status=orch_status,
+            total_errors=1 if is_failure else 0,
+            completed_at=db._utcnow(),
+            duration_seconds=time.time() - start,
+        )
+        if not is_failure:
+            _send_success_notification(
+                "neo4j_graphsage_inference", orch_run_id,
+                time.time() - start,
+                nodes_inferred=result.get("nodes_inferred", 0),
+            )
+        return result
+
+    except Exception as exc:
+        db.update_orchestration_run(
+            orch_run_id,
+            status="failed",
+            total_errors=1,
+            completed_at=db._utcnow(),
+            duration_seconds=time.time() - start,
+        )
+        raise
+
+
+# ══════════════════════════════════════════════════════
+# Flow Registry (for dispatching by name)
+# ══════════════════════════════════════════════════════
+
 FLOW_REGISTRY = {
     "full_ingestion": full_ingestion_flow,
     "bronze_to_gold": bronze_to_gold_flow,
@@ -851,4 +1044,7 @@ FLOW_REGISTRY = {
     "neo4j_reconciliation": neo4j_reconciliation_flow,
     "neo4j_realtime_worker": neo4j_realtime_worker_flow,
     "multi_source_ingestion": multi_source_ingestion_flow,
+    "neo4j_embedding_backfill": neo4j_embedding_backfill_flow,
+    "neo4j_graphsage_retrain": neo4j_graphsage_retrain_flow,
+    "neo4j_graphsage_inference": neo4j_graphsage_inference_flow,
 }
