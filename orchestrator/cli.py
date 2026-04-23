@@ -227,6 +227,16 @@ def cmd_runs(args):
         print(f"{run_id:<38} {flow:<25} {status:<15} {records:<10} {duration_str:<10}")
 
 
+def _check_neo4j_result(result, action_label: str) -> None:
+    """Check the flow result and exit 1 if the flow reported failure."""
+    if isinstance(result, dict) and result.get("status") == "failed":
+        print(f"❌ {action_label} FAILED.")
+        if result.get("error"):
+            print(f"   Error: {result['error']}")
+        sys.exit(1)
+    print(f"✅ {action_label} completed.")
+
+
 def cmd_neo4j(args):
     """Neo4j sync commands."""
     if args.neo4j_action == "sync":
@@ -238,7 +248,7 @@ def cmd_neo4j(args):
             trigger_type="manual",
             triggered_by="cli",
         )
-        print(f"✅ Neo4j sync completed.")
+        _check_neo4j_result(result, "Neo4j sync")
         if isinstance(result, dict):
             print(f"   Status: {result.get('status', '?')}")
             print(f"   Layers: {result.get('layers_run', '?')}")
@@ -250,7 +260,7 @@ def cmd_neo4j(args):
             trigger_type="manual",
             triggered_by="cli",
         )
-        print(f"✅ Reconciliation completed.")
+        _check_neo4j_result(result, "Reconciliation")
         if isinstance(result, dict):
             print(f"   Tables checked: {result.get('tables_checked', '?')}")
             print(f"   Drifts detected: {result.get('drifts_detected', '?')}")
@@ -271,7 +281,7 @@ def cmd_neo4j(args):
             trigger_type="manual",
             triggered_by="cli",
         )
-        print(f"✅ Embedding backfill completed.")
+        _check_neo4j_result(result, "Embedding backfill")
         if isinstance(result, dict):
             print(f"   Labels checked: {result.get('labels_checked', '?')}")
             print(f"   Nodes backfilled: {result.get('total_backfilled', '?')}")
@@ -283,7 +293,7 @@ def cmd_neo4j(args):
             trigger_type="manual",
             triggered_by="cli",
         )
-        print(f"✅ GraphSAGE retrain completed.")
+        _check_neo4j_result(result, "GraphSAGE retrain")
         if isinstance(result, dict):
             print(f"   Status: {result.get('status', '?')}")
             print(f"   Model: {result.get('model_name', '?')}")
@@ -296,7 +306,7 @@ def cmd_neo4j(args):
             trigger_type="manual",
             triggered_by="cli",
         )
-        print(f"✅ GraphSAGE inference completed.")
+        _check_neo4j_result(result, "GraphSAGE inference")
         if isinstance(result, dict):
             print(f"   Status: {result.get('status', '?')}")
             print(f"   Nodes inferred: {result.get('nodes_inferred', '?')}")

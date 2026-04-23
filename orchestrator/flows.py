@@ -884,7 +884,7 @@ def neo4j_embedding_backfill_flow(
             orch_run_id,
             status=orch_status,
             total_records_written=result.get("total_backfilled", 0),
-            total_errors=len(result.get("errors", [])) if is_failure else 0,
+            total_errors=max(1, len(result.get("errors", []))) if is_failure else 0,
             completed_at=db._utcnow(),
             duration_seconds=time.time() - start,
         )
