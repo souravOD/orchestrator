@@ -80,6 +80,12 @@ def list_pipeline_definitions(active_only: bool = True) -> List[Dict[str, Any]]:
 # Orchestration Runs
 # ══════════════════════════════════════════════════════
 
+_FLOW_GROUP_MAP = {
+    "neo4j_graphsage_retrain": "graphsage",
+    "neo4j_graphsage_inference": "graphsage",
+}
+
+
 def create_orchestration_run(
     flow_name: str,
     trigger_type: str = "manual",
@@ -90,7 +96,12 @@ def create_orchestration_run(
     source_name: Optional[str] = None,
     vendor_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Insert a new orchestration_run and return the record."""
+    """Insert a new orchestration_run and return the record.
+
+    If a partial unique index prevents a duplicate running row, the
+    INSERT will raise a unique-violation that we convert to a
+    ``ConcurrentRunError`` so the flow layer can handle it uniformly.
+    """
     payload = {
         "flow_name": flow_name,
         "flow_type": flow_type,
@@ -103,11 +114,22 @@ def create_orchestration_run(
         "started_at": _utcnow(),
         "config": config or {},
     }
+    # Set flow_group for mutual-exclusion enforcement
+    flow_group = _FLOW_GROUP_MAP.get(flow_name)
+    if flow_group:
+        payload["flow_group"] = flow_group
     if source_name:
         payload["source_name"] = source_name
     if vendor_id:
         payload["vendor_id"] = vendor_id
-    result = _orch_table("orchestration_runs").insert(payload).execute()
+    try:
+        result = _orch_table("orchestration_runs").insert(payload).execute()
+    except Exception as exc:
+        err = str(exc).lower()
+        if "unique" in err or "duplicate" in err or "23505" in err:
+            from .flows import ConcurrentRunError
+            raise ConcurrentRunError(flow_name) from exc
+        raise
     row = (result.data or [None])[0]
     logger.info("Created orchestration_run %s (flow=%s, source=%s)", row["id"], flow_name, source_name)
     return row

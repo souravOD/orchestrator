@@ -25,6 +25,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from . import db
 from .config import settings
@@ -554,16 +555,11 @@ async def get_run_steps(run_id: str):
 async def trigger_neo4j_sync(layer: str = "all"):
     """Trigger a Gold→Neo4j batch sync."""
     from .flows import neo4j_batch_sync_flow
-    try:
-        result = neo4j_batch_sync_flow(
-            layer=layer,
-            trigger_type="api",
-            triggered_by="api:/api/neo4j/sync",
-        )
-        return {"status": "completed", "result": _safe_serialise(result)}
-    except Exception as exc:
-        logger.error("Neo4j sync trigger failed: %s", exc)
-        raise HTTPException(status_code=500, detail=str(exc))
+    return _run_flow_endpoint(
+        neo4j_batch_sync_flow,
+        {"layer": layer, "trigger_type": "api", "triggered_by": "api:/api/neo4j/sync"},
+        "Neo4j sync",
+    )
 
 
 @app.get("/api/neo4j/sync-status")
@@ -586,45 +582,33 @@ async def neo4j_reconciliation_status():
 async def trigger_embedding_backfill():
     """Trigger a semantic embedding backfill pass."""
     from .flows import neo4j_embedding_backfill_flow
-    try:
-        result = neo4j_embedding_backfill_flow(
-            trigger_type="api",
-            triggered_by="api:/api/neo4j/embeddings",
-        )
-        return {"status": "completed", "result": _safe_serialise(result)}
-    except Exception as exc:
-        logger.error("Embedding backfill trigger failed: %s", exc)
-        raise HTTPException(status_code=500, detail=str(exc))
+    return _run_flow_endpoint(
+        neo4j_embedding_backfill_flow,
+        {"trigger_type": "api", "triggered_by": "api:/api/neo4j/embeddings"},
+        "Embedding backfill",
+    )
 
 
 @app.post("/api/neo4j/graphsage/retrain")
 async def trigger_graphsage_retrain():
     """Trigger a GraphSAGE model retraining."""
     from .flows import neo4j_graphsage_retrain_flow
-    try:
-        result = neo4j_graphsage_retrain_flow(
-            trigger_type="api",
-            triggered_by="api:/api/neo4j/graphsage/retrain",
-        )
-        return {"status": "completed", "result": _safe_serialise(result)}
-    except Exception as exc:
-        logger.error("GraphSAGE retrain trigger failed: %s", exc)
-        raise HTTPException(status_code=500, detail=str(exc))
+    return _run_flow_endpoint(
+        neo4j_graphsage_retrain_flow,
+        {"trigger_type": "api", "triggered_by": "api:/api/neo4j/graphsage/retrain"},
+        "GraphSAGE retrain",
+    )
 
 
 @app.post("/api/neo4j/graphsage/inference")
 async def trigger_graphsage_inference():
     """Trigger GraphSAGE inference for new nodes."""
     from .flows import neo4j_graphsage_inference_flow
-    try:
-        result = neo4j_graphsage_inference_flow(
-            trigger_type="api",
-            triggered_by="api:/api/neo4j/graphsage/inference",
-        )
-        return {"status": "completed", "result": _safe_serialise(result)}
-    except Exception as exc:
-        logger.error("GraphSAGE inference trigger failed: %s", exc)
-        raise HTTPException(status_code=500, detail=str(exc))
+    return _run_flow_endpoint(
+        neo4j_graphsage_inference_flow,
+        {"trigger_type": "api", "triggered_by": "api:/api/neo4j/graphsage/inference"},
+        "GraphSAGE inference",
+    )
 
 
 # ══════════════════════════════════════════════════════
@@ -745,3 +729,34 @@ def _safe_serialise(obj: Any) -> Any:
     if hasattr(obj, "__dict__"):
         return str(obj)
     return obj
+
+
+def _run_flow_endpoint(flow_fn, flow_kwargs: dict, endpoint_name: str):
+    """Run a flow and return JSON with correct HTTP status code.
+
+    Returns 200 on success/skipped, 500 on logical failure.
+    Infrastructure exceptions propagate as 500 via the except block.
+    """
+    try:
+        result = flow_fn(**flow_kwargs)
+        serialised = _safe_serialise(result)
+
+        # Inspect task-level status from the result dict
+        task_status = result.get("status") if isinstance(result, dict) else None
+
+        if task_status == "failed":
+            logger.error("\u274c %s returned failure: %s", endpoint_name, result.get("error"))
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "status": "failed",
+                    "error": str(result.get("error", "Task reported failure")),
+                    "result": serialised,
+                },
+            )
+
+        return {"status": "completed", "result": serialised}
+
+    except Exception as exc:
+        logger.error("%s trigger failed: %s", endpoint_name, exc)
+        raise HTTPException(status_code=500, detail=str(exc))
