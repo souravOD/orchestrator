@@ -77,7 +77,7 @@ services:
         aliases:
           - orchestrator-dashboard
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3005"]
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3005"]
       interval: 30s
       timeout: 5s
       start_period: 30s
