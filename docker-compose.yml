@@ -71,13 +71,13 @@ services:
     container_name: orchestrator-dashboard
     restart: unless-stopped
     expose:
-      - "3000"
+      - "3005"
     networks:
       coolify:
         aliases:
           - orchestrator-dashboard
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000"]
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3005"]
       interval: 30s
       timeout: 5s
       start_period: 30s
@@ -91,7 +91,16 @@ services:
       - "traefik.http.routers.http-dashboard-0.entrypoints=http"
       - "traefik.http.routers.http-dashboard-0.rule=Host(`orchestrator-ui.207.244.226.234.sslip.io`)"
       - "traefik.http.routers.http-dashboard-0.service=http-dashboard-0"
-      - "traefik.http.services.http-dashboard-0.loadbalancer.server.port=3000"
+      - "traefik.http.services.http-dashboard-0.loadbalancer.server.port=3005"
+      # ── Traefik HTTPS Routing ──
+      - "traefik.http.routers.https-dashboard-0.entrypoints=https"
+      - "traefik.http.routers.https-dashboard-0.rule=Host(`orchestrator-ui.207.244.226.234.sslip.io`)"
+      - "traefik.http.routers.https-dashboard-0.service=http-dashboard-0"
+      - "traefik.http.routers.https-dashboard-0.tls=true"
+      - "traefik.http.routers.https-dashboard-0.tls.certresolver=letsencrypt"
+      # ── Caddy Fallback ──
+      - "caddy_1=http://orchestrator-ui.207.244.226.234.sslip.io"
+      - "caddy_1.handle_path.0_reverse_proxy={{upstreams 3005}}"
 
 networks:
   coolify:
