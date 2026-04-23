@@ -99,6 +99,9 @@ CREATE TABLE orchestration.orchestration_runs (
 
     created_at              timestamptz DEFAULT now(),
 
+    -- Mutual exclusion grouping (e.g. graphsage retrain + inference)
+    flow_group              varchar(50),
+
     CONSTRAINT orch_runs_status_check CHECK (
         status IN ('pending','queued','running','completed','failed',
                    'partially_completed','cancelled','timed_out')
@@ -121,8 +124,20 @@ CREATE INDEX idx_orch_runs_source
 CREATE INDEX idx_orch_runs_vendor
     ON orchestration.orchestration_runs (vendor_id, created_at DESC);
 
+-- Atomic concurrent-run prevention (per flow + per source)
+CREATE UNIQUE INDEX idx_orch_runs_single_running
+    ON orchestration.orchestration_runs (flow_name, COALESCE(source_name, ''))
+    WHERE status = 'running';
+
+-- Cross-flow mutual exclusion (e.g. graphsage retrain ↔ inference)
+CREATE UNIQUE INDEX idx_orch_runs_single_running_group
+    ON orchestration.orchestration_runs (flow_group)
+    WHERE status = 'running' AND flow_group IS NOT NULL;
+
 COMMENT ON TABLE orchestration.orchestration_runs
     IS 'Top-level orchestration flow execution. Groups one or more pipeline_runs.';
+COMMENT ON COLUMN orchestration.orchestration_runs.flow_group
+    IS 'Optional grouping for mutual exclusion across related flows (e.g. graphsage).';
 
 
 -- ─────────────────────────────────────────────
