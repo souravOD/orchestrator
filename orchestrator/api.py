@@ -828,6 +828,16 @@ async def trigger_data_source_ingest(
             )
         except Exception as exc:
             logger.error("Data source ingest failed: %s", exc)
+            # Mark the pre-created run as failed so it doesn't stay zombie
+            try:
+                db.update_orchestration_run(
+                    run_id,
+                    status="failed",
+                    total_errors=1,
+                    completed_at=db._utcnow(),
+                )
+            except Exception as update_exc:
+                logger.warning("Failed to mark ingest run %s as failed: %s", run_id, update_exc)
 
     asyncio.create_task(asyncio.to_thread(_run))
     return {"status": "started", "run_id": run_id, "source_name": source["source_name"]}
@@ -889,6 +899,19 @@ async def trigger_schedule(schedule_id: str):
             }
             if source_name:
                 kwargs["source_name"] = source_name
+
+            # Extract flow-specific args from run_config — gated by flow
+            # so we don't pass e.g. 'layer' to full_ingestion (TypeError)
+            flow_arg_map = {
+                "full_ingestion": {"input_path", "storage_bucket", "storage_path", "vendor_id"},
+                "single_layer": {"layer", "input_path"},
+                "bronze_to_gold": {"vendor_id"},
+            }
+            allowed_keys = flow_arg_map.get(flow_name, set())
+            for key in allowed_keys:
+                if key in run_config:
+                    kwargs[key] = run_config[key]
+
             flow_fn(**kwargs)
         except Exception as exc:
             logger.error("Manual schedule trigger failed: %s", exc)
@@ -900,8 +923,8 @@ async def trigger_schedule(schedule_id: str):
                     total_errors=1,
                     completed_at=db._utcnow(),
                 )
-            except Exception:
-                pass
+            except Exception as update_exc:
+                logger.warning("Failed to mark schedule run %s as failed: %s", run_id, update_exc)
 
     asyncio.create_task(asyncio.to_thread(_run))
     return {"status": "started", "run_id": run_id, "flow_name": flow_name}
