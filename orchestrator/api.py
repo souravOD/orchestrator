@@ -293,9 +293,21 @@ async def trigger_flow(request: TriggerRequest):
         def _run():
             db.set_env(environment)  # re-set for thread context
             # In test mode, prefix storage paths with testing/
-            if environment == "testing" and "storage_bucket" in kwargs:
+            if environment == "testing" and "storage_path" in kwargs:
                 kwargs["storage_path"] = f"testing/{kwargs.get('storage_path', '')}"
-            flow_fn(**kwargs)
+            try:
+                flow_fn(**kwargs)
+            except Exception as exc:
+                logger.error("API trigger flow failed: %s", exc)
+                try:
+                    db.update_orchestration_run(
+                        orch_run_id,
+                        status="failed",
+                        total_errors=1,
+                        completed_at=db._utcnow(),
+                    )
+                except Exception as update_exc:
+                    logger.warning("Failed to mark trigger run %s as failed: %s", orch_run_id, update_exc)
 
         asyncio.create_task(asyncio.to_thread(_run))
 
@@ -932,7 +944,10 @@ async def trigger_schedule(schedule_id: str):
                    f"which requires 'source_name' in run_config.",
         )
 
-    # Pre-create run
+    # Pre-create run — set env FIRST so it lands in correct DB
+    environment = run_config.get("environment", "production")
+    db.set_env(environment)
+
     orch_run = db.create_orchestration_run(
         flow_name=flow_name,
         trigger_type="manual_schedule",
@@ -942,10 +957,8 @@ async def trigger_schedule(schedule_id: str):
     )
     run_id = orch_run["id"]
 
-    environment = run_config.get("environment", "production")
-
     def _run():
-        db.set_env(environment)
+        db.set_env(environment)  # re-set for thread context
         try:
             kwargs = {
                 "trigger_type": "manual_schedule",
@@ -968,6 +981,10 @@ async def trigger_schedule(schedule_id: str):
                 if key in run_config:
                     kwargs[key] = run_config[key]
 
+            # In test mode, prefix storage paths with testing/
+            if environment == "testing" and "storage_path" in kwargs:
+                kwargs["storage_path"] = f"testing/{kwargs['storage_path']}"
+
             flow_fn(**kwargs)
         except Exception as exc:
             logger.error("Manual schedule trigger failed: %s", exc)
@@ -983,6 +1000,7 @@ async def trigger_schedule(schedule_id: str):
                 logger.warning("Failed to mark schedule run %s as failed: %s", run_id, update_exc)
 
     asyncio.create_task(asyncio.to_thread(_run))
+    db.set_env("production")  # reset for subsequent API requests
     return {"status": "started", "run_id": run_id, "flow_name": flow_name}
 
 
