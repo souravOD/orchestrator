@@ -76,7 +76,7 @@ class OrchestratorSettings(BaseSettings):
     neo4j_pipeline_dir: str = "gold-to-neo4j"
 
     # ── Parallel Ingestion ───────────────────────────
-    parallel_max_concurrency: int = 2               # max sources running simultaneously
+    parallel_max_concurrency: int = 5               # max sources running simultaneously
     parallel_work_dir: str = "/tmp/orchestrator-work"  # base dir for per-source isolation
     parallel_queue_warn_threshold: int = 10          # alert if backlog exceeds this
 

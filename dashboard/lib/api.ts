@@ -4,7 +4,7 @@
  * Typed fetch wrappers for the FastAPI orchestrator backend.
  */
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8100";
+export const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8100";
 
 async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
     try {
@@ -212,4 +212,145 @@ export const api = {
         fetchApi<{ status: string }>(`/api/dead-letters/${id}`, {
             method: "DELETE",
         }),
+
+    // ── Flow Registry ──────────────────────────────────
+
+    listFlows: () =>
+        fetchApi<{ flows: FlowDefinition[]; count: number }>("/api/flows"),
+
+    triggerFlow: (payload: Record<string, unknown>) =>
+        fetchApi<{ status: string; run_id: string; flow_name?: string }>(
+            "/api/trigger",
+            { method: "POST", body: JSON.stringify(payload) }
+        ),
+
+    // ── Data Sources ───────────────────────────────────
+
+    listDataSources: (category?: string, status?: string) => {
+        const params = new URLSearchParams();
+        if (category) params.set("category", category);
+        if (status) params.set("status", status);
+        return fetchApi<{ data_sources: DataSource[]; count: number }>(
+            `/api/data-sources?${params}`
+        );
+    },
+
+    getDataSource: (id: string) =>
+        fetchApi<{ source: DataSource; cursors: DataSourceCursor[] }>(
+            `/api/data-sources/${id}`
+        ),
+
+    triggerDataSourceIngest: (id: string, config: Record<string, unknown>) =>
+        fetchApi<{ status: string; run_id: string; source_name?: string }>(
+            `/api/data-sources/${id}/ingest`,
+            { method: "POST", body: JSON.stringify(config) }
+        ),
+
+    // ── Schedules ──────────────────────────────────────
+
+    listSchedules: () =>
+        fetchApi<{ schedules: ScheduleDefinition[]; count: number }>(
+            "/api/schedules"
+        ),
+
+    triggerSchedule: (id: string) =>
+        fetchApi<{ status: string; run_id: string; flow_name?: string }>(
+            `/api/schedules/${id}/trigger`,
+            { method: "POST" }
+        ),
+
+    updateSchedule: (id: string, fields: Record<string, unknown>) =>
+        fetchApi<ScheduleDefinition>(
+            `/api/schedules/${id}`,
+            { method: "PATCH", body: JSON.stringify(fields) }
+        ),
+
+    // ── Event Triggers ─────────────────────────────────
+
+    listEventTriggers: () =>
+        fetchApi<{ triggers: EventTrigger[]; count: number }>(
+            "/api/event-triggers"
+        ),
+
+    updateEventTrigger: (id: string, fields: Record<string, unknown>) =>
+        fetchApi<EventTrigger>(
+            `/api/event-triggers/${id}`,
+            { method: "PATCH", body: JSON.stringify(fields) }
+        ),
 };
+
+// ── New Types ──────────────────────────────────────────
+
+export interface FlowDefinition {
+    name: string;
+    description: string;
+}
+
+export interface DataSource {
+    id: string;
+    source_name: string;
+    category: string;
+    storage_bucket: string;
+    storage_path: string;
+    file_format: string;
+    file_size_bytes: number | null;
+    total_records: number;
+    total_ingested: number;
+    target_table: string;
+    description: string | null;
+    status: string;
+    is_active: boolean;
+    tags: string[];
+    parent_source_id: string | null;
+    last_ingested_at: string | null;
+    created_at: string;
+    updated_at: string;
+    latest_cursor?: DataSourceCursor | null;
+}
+
+export interface DataSourceCursor {
+    id: string;
+    data_source_id: string;
+    cursor_type: string;
+    cursor_start: number;
+    cursor_end: number;
+    batch_size: number;
+    status: string;
+    records_processed: number;
+    records_written: number;
+    records_skipped: number;
+    records_failed: number;
+    error_message: string | null;
+    started_at: string | null;
+    completed_at: string | null;
+    created_at: string;
+}
+
+export interface ScheduleDefinition {
+    id: string;
+    schedule_name: string;
+    cron_expression: string;
+    flow_name: string;
+    run_config: Record<string, unknown>;
+    is_active: boolean;
+    description: string | null;
+    last_run_at: string | null;
+    next_run_at: string | null;
+    created_at: string;
+    updated_at: string;
+}
+
+export interface EventTrigger {
+    id: string;
+    trigger_name: string;
+    event_type: string;
+    source_schema: string | null;
+    source_table: string | null;
+    flow_name: string;
+    filter_config: Record<string, unknown>;
+    debounce_seconds: number;
+    is_active: boolean;
+    description: string | null;
+    created_at: string;
+    updated_at: string;
+}
