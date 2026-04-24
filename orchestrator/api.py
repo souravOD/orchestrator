@@ -828,6 +828,16 @@ async def trigger_data_source_ingest(
             )
         except Exception as exc:
             logger.error("Data source ingest failed: %s", exc)
+            # Mark the pre-created run as failed so it doesn't stay zombie
+            try:
+                db.update_orchestration_run(
+                    run_id,
+                    status="failed",
+                    total_errors=1,
+                    completed_at=db._utcnow(),
+                )
+            except Exception:
+                pass
 
     asyncio.create_task(asyncio.to_thread(_run))
     return {"status": "started", "run_id": run_id, "source_name": source["source_name"]}
@@ -889,6 +899,17 @@ async def trigger_schedule(schedule_id: str):
             }
             if source_name:
                 kwargs["source_name"] = source_name
+
+            # Extract flow-specific args from run_config so they bind
+            # to the flow function signature (e.g. layer for single_layer)
+            flow_arg_keys = {
+                "layer", "input_path", "storage_bucket",
+                "storage_path", "vendor_id",
+            }
+            for key in flow_arg_keys:
+                if run_config.get(key):
+                    kwargs[key] = run_config[key]
+
             flow_fn(**kwargs)
         except Exception as exc:
             logger.error("Manual schedule trigger failed: %s", exc)
