@@ -137,8 +137,11 @@ INSERT INTO orchestration.data_source_cursors
      status, records_processed, records_written, completed_at)
 SELECT id, 'row_offset', 0, 1200, 1200,
        'completed', 1200, 1200, NOW()
-FROM orchestration.data_sources
-WHERE source_name = 'food_com_recipes';
+FROM orchestration.data_sources ds
+WHERE ds.source_name = 'food_com_recipes'
+  AND NOT EXISTS (
+    SELECT 1 FROM orchestration.data_source_cursors c WHERE c.data_source_id = ds.id
+  );
 
 -- allrecipes_full: 1,000 of 39,802 ingested (from 1K sample extraction)
 INSERT INTO orchestration.data_source_cursors
@@ -146,8 +149,11 @@ INSERT INTO orchestration.data_source_cursors
      status, records_processed, records_written, completed_at)
 SELECT id, 'row_offset', 0, 1000, 1000,
        'completed', 1000, 1000, NOW()
-FROM orchestration.data_sources
-WHERE source_name = 'allrecipes_full';
+FROM orchestration.data_sources ds
+WHERE ds.source_name = 'allrecipes_full'
+  AND NOT EXISTS (
+    SELECT 1 FROM orchestration.data_source_cursors c WHERE c.data_source_id = ds.id
+  );
 
 -- indb_normalized: 1,000 of 1,014 ingested
 INSERT INTO orchestration.data_source_cursors
@@ -155,8 +161,11 @@ INSERT INTO orchestration.data_source_cursors
      status, records_processed, records_written, completed_at)
 SELECT id, 'row_offset', 0, 1000, 1000,
        'completed', 1000, 1000, NOW()
-FROM orchestration.data_sources
-WHERE source_name = 'indb_normalized';
+FROM orchestration.data_sources ds
+WHERE ds.source_name = 'indb_normalized'
+  AND NOT EXISTS (
+    SELECT 1 FROM orchestration.data_source_cursors c WHERE c.data_source_id = ds.id
+  );
 
 -- usda_fruits: 100 of 136 ingested
 INSERT INTO orchestration.data_source_cursors
@@ -164,8 +173,11 @@ INSERT INTO orchestration.data_source_cursors
      status, records_processed, records_written, completed_at)
 SELECT id, 'row_offset', 0, 100, 100,
        'completed', 100, 100, NOW()
-FROM orchestration.data_sources
-WHERE source_name = 'usda_fruits';
+FROM orchestration.data_sources ds
+WHERE ds.source_name = 'usda_fruits'
+  AND NOT EXISTS (
+    SELECT 1 FROM orchestration.data_source_cursors c WHERE c.data_source_id = ds.id
+  );
 
 -- off_products_batch_1: 3,500 of 12,118 ingested (includes 3K sample overlap)
 INSERT INTO orchestration.data_source_cursors
@@ -173,8 +185,11 @@ INSERT INTO orchestration.data_source_cursors
      status, records_processed, records_written, completed_at)
 SELECT id, 'row_offset', 0, 3500, 3500,
        'completed', 3500, 3500, NOW()
-FROM orchestration.data_sources
-WHERE source_name = 'off_products_batch_1';
+FROM orchestration.data_sources ds
+WHERE ds.source_name = 'off_products_batch_1'
+  AND NOT EXISTS (
+    SELECT 1 FROM orchestration.data_source_cursors c WHERE c.data_source_id = ds.id
+  );
 
 -- food_com_sample_300: all 342 of 342 ingested
 INSERT INTO orchestration.data_source_cursors
@@ -182,8 +197,11 @@ INSERT INTO orchestration.data_source_cursors
      status, records_processed, records_written, completed_at)
 SELECT id, 'row_offset', 0, 342, 342,
        'completed', 342, 342, NOW()
-FROM orchestration.data_sources
-WHERE source_name = 'food_com_sample_300';
+FROM orchestration.data_sources ds
+WHERE ds.source_name = 'food_com_sample_300'
+  AND NOT EXISTS (
+    SELECT 1 FROM orchestration.data_source_cursors c WHERE c.data_source_id = ds.id
+  );
 
 
 -- ══════════════════════════════════════════════════════

@@ -904,7 +904,7 @@ async def trigger_schedule(schedule_id: str):
             # so we don't pass e.g. 'layer' to full_ingestion (TypeError)
             flow_arg_map = {
                 "full_ingestion": {"input_path", "storage_bucket", "storage_path", "vendor_id"},
-                "single_layer": {"layer", "input_path", "storage_bucket", "storage_path"},
+                "single_layer": {"layer", "input_path"},
                 "bronze_to_gold": {"vendor_id"},
             }
             allowed_keys = flow_arg_map.get(flow_name, set())
