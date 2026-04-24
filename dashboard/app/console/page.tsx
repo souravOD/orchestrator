@@ -122,18 +122,16 @@ export default function ConsolePage() {
                 flow_name: selectedFlow,
                 trigger_type: "manual",
                 triggered_by: "dashboard:console",
-                config: {
-                    batch_size: batchSize,
-                    incremental,
-                    dry_run: dryRun,
-                },
+                batch_size: batchSize,
+                incremental,
+                dry_run: dryRun,
             };
 
             if (SOURCE_FLOWS.has(selectedFlow) && sourceName) {
                 payload.source_name = sourceName;
             }
             if (selectedFlow === "single_layer") {
-                payload.layer = layer;
+                payload.layers = [layer];
             }
             if (PARALLEL_FLOWS.has(selectedFlow)) {
                 payload.max_concurrency = workers;

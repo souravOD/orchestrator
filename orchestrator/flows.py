@@ -858,7 +858,7 @@ def multi_source_ingestion_flow(
     }
 
     # Persist logs for all sub-runs (best-effort)
-    for run_id in (pre_created_run_ids or []):
+    for run_id in (pre_created_run_ids or {}).values():
         _maybe_persist_logs(run_id, flow="multi_source_ingestion")
 
     return result

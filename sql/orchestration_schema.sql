@@ -297,6 +297,7 @@ CREATE TABLE orchestration.event_triggers (
     debounce_seconds    int          DEFAULT 0,
     is_active           boolean      DEFAULT true,
     created_at          timestamptz  DEFAULT now(),
+    updated_at          timestamptz  DEFAULT now(),
 
     CONSTRAINT event_trigger_type_check CHECK (
         event_type IN ('supabase_insert','supabase_update','supabase_delete',

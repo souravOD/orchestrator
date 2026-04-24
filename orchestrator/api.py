@@ -772,8 +772,6 @@ async def trigger_data_source_ingest(
     request: Request,
 ):
     """Trigger ingestion for a data source from its current cursor position."""
-    import threading
-
     source = db.get_data_source(source_id)
     if not source:
         raise HTTPException(status_code=404, detail="Data source not found")
@@ -820,13 +818,18 @@ async def trigger_data_source_ingest(
                 storage_path=source["storage_path"],
                 trigger_type="api",
                 triggered_by="dashboard:/api/data-sources/ingest",
-                config={"batch_size": batch_size, "dry_run": dry_run},
+                config={
+                    "batch_size": batch_size,
+                    "dry_run": dry_run,
+                    "cursor_start": cursor_start,
+                    "record_count": record_count,
+                },
                 orch_run_id=run_id,
             )
         except Exception as exc:
             logger.error("Data source ingest failed: %s", exc)
 
-    threading.Thread(target=_run, daemon=True).start()
+    asyncio.create_task(asyncio.to_thread(_run))
     return {"status": "started", "run_id": run_id, "source_name": source["source_name"]}
 
 
@@ -844,8 +847,6 @@ async def list_schedules():
 @app.post("/api/schedules/{schedule_id}/trigger")
 async def trigger_schedule(schedule_id: str):
     """Manually execute a schedule's flow immediately."""
-    import threading
-
     schedule = db.get_schedule(schedule_id)
     if not schedule:
         raise HTTPException(status_code=404, detail="Schedule not found")
@@ -858,13 +859,23 @@ async def trigger_schedule(schedule_id: str):
     if not flow_fn:
         raise HTTPException(status_code=400, detail=f"Unknown flow: {flow_name}")
 
+    # Validate: flows like full_ingestion require source_name
+    requires_source = flow_name in ("full_ingestion", "bronze_to_gold", "single_layer")
+    source_name = run_config.get("source_name")
+    if requires_source and not source_name:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Schedule '{schedule['schedule_name']}' targets flow '{flow_name}' "
+                   f"which requires 'source_name' in run_config.",
+        )
+
     # Pre-create run
     orch_run = db.create_orchestration_run(
         flow_name=flow_name,
         trigger_type="manual_schedule",
         triggered_by=f"dashboard:schedule:{schedule['schedule_name']}",
         config=run_config,
-        source_name=run_config.get("source_name"),
+        source_name=source_name,
     )
     run_id = orch_run["id"]
 
@@ -876,14 +887,23 @@ async def trigger_schedule(schedule_id: str):
                 "config": run_config,
                 "orch_run_id": run_id,
             }
-            # Only pass source_name if the flow accepts it
-            if run_config.get("source_name"):
-                kwargs["source_name"] = run_config["source_name"]
+            if source_name:
+                kwargs["source_name"] = source_name
             flow_fn(**kwargs)
         except Exception as exc:
             logger.error("Manual schedule trigger failed: %s", exc)
+            # Mark the pre-created run as failed so it doesn't stay zombie
+            try:
+                db.update_orchestration_run(
+                    run_id,
+                    status="failed",
+                    total_errors=1,
+                    completed_at=db._utcnow(),
+                )
+            except Exception:
+                pass
 
-    threading.Thread(target=_run, daemon=True).start()
+    asyncio.create_task(asyncio.to_thread(_run))
     return {"status": "started", "run_id": run_id, "flow_name": flow_name}
 
 

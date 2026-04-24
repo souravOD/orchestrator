@@ -485,7 +485,8 @@ def update_event_trigger(trigger_id: str, **fields: Any) -> Dict[str, Any]:
     """Update an event trigger definition (is_active, debounce_seconds, etc)."""
     allowed = {"is_active", "debounce_seconds", "filter_config"}
     patch = {k: v for k, v in fields.items() if k in allowed}
-    if not patch:
+    patch["updated_at"] = _utcnow()
+    if not patch or patch.keys() == {"updated_at"}:
         return {}
     result = (
         _orch_table("event_triggers")
