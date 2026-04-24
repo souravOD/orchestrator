@@ -827,6 +827,9 @@ async def trigger_data_source_ingest(
     request: Request,
 ):
     """Trigger ingestion for a data source from its current cursor position."""
+    # NOTE: Source metadata and cursor reads are INTENTIONALLY from production.
+    # The data_sources registry is the single source of truth in production.
+    # set_env() is called later to route only orchestration WRITES to test DB.
     source = db.get_data_source(source_id)
     if not source:
         raise HTTPException(status_code=404, detail="Data source not found")

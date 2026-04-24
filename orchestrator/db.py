@@ -26,8 +26,15 @@ _active_env: contextvars.ContextVar[str] = contextvars.ContextVar(
 )
 
 
+_VALID_ENVS = {"production", "testing"}
+
+
 def set_env(env: str = "production") -> None:
     """Set the active environment for the current async context / thread."""
+    if env not in _VALID_ENVS:
+        raise ValueError(
+            f"Invalid environment '{env}'. Must be one of: {_VALID_ENVS}"
+        )
     _active_env.set(env)
 
 
