@@ -249,6 +249,10 @@ async def trigger_flow(request: TriggerRequest):
         else:
             layers = request.layers or ["bronze_to_silver"]
 
+        # ── Set environment BEFORE creating run so it lands in correct DB ──
+        environment = request.environment
+        db.set_env(environment)
+
         # ── Create the orchestration_runs row NOW so we can return run_id ──
         orch_run = db.create_orchestration_run(
             flow_name=request.flow_name,
@@ -286,16 +290,17 @@ async def trigger_flow(request: TriggerRequest):
             kwargs["source_name"] = source_name
 
         # Dispatch to background thread — API returns immediately.
-        environment = request.environment
-
         def _run():
-            db.set_env(environment)
+            db.set_env(environment)  # re-set for thread context
             # In test mode, prefix storage paths with testing/
             if environment == "testing" and "storage_bucket" in kwargs:
                 kwargs["storage_path"] = f"testing/{kwargs.get('storage_path', '')}"
             flow_fn(**kwargs)
 
         asyncio.create_task(asyncio.to_thread(_run))
+
+        # Reset to production for subsequent API requests in this context
+        db.set_env("production")
 
         return {
             "status": "accepted",
@@ -827,6 +832,14 @@ async def trigger_data_source_ingest(
 
     record_count = min(body.get("record_count", remaining), remaining)
 
+    environment = body.get("environment", "production")
+    db.set_env(environment)  # set BEFORE creating run
+
+    storage_path = source["storage_path"]
+    # In test mode, prefix storage path to read from testing/ subfolder
+    if environment == "testing":
+        storage_path = f"testing/{storage_path}"
+
     # Pre-create orchestration run so we can return the ID immediately
     orch_run = db.create_orchestration_run(
         flow_name="full_ingestion",
@@ -848,14 +861,8 @@ async def trigger_data_source_ingest(
     from .flows import FLOW_REGISTRY
     flow_fn = FLOW_REGISTRY.get("full_ingestion")
 
-    environment = body.get("environment", "production")
-    storage_path = source["storage_path"]
-    # In test mode, prefix storage path to read from testing/ subfolder
-    if environment == "testing":
-        storage_path = f"testing/{storage_path}"
-
     def _run():
-        db.set_env(environment)
+        db.set_env(environment)  # re-set for thread context
         try:
             flow_fn(
                 source_name=source["source_name"],
@@ -885,6 +892,7 @@ async def trigger_data_source_ingest(
                 logger.warning("Failed to mark ingest run %s as failed: %s", run_id, update_exc)
 
     asyncio.create_task(asyncio.to_thread(_run))
+    db.set_env("production")  # reset for subsequent API requests
     return {"status": "started", "run_id": run_id, "source_name": source["source_name"]}
 
 
