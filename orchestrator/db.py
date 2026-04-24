@@ -409,7 +409,7 @@ def list_step_logs(
 
 
 # ══════════════════════════════════════════════════════
-# Schedules & Event Triggers (read-only from DB)
+# Schedules & Event Triggers
 # ══════════════════════════════════════════════════════
 
 def list_active_schedules() -> List[Dict[str, Any]]:
@@ -430,6 +430,217 @@ def list_active_event_triggers() -> List[Dict[str, Any]]:
         .eq("is_active", True)
         .execute()
     ).data or []
+
+
+def list_all_schedules() -> List[Dict[str, Any]]:
+    """List ALL schedule definitions (including inactive) for dashboard display."""
+    return (
+        _orch_table("schedule_definitions")
+        .select("*")
+        .order("schedule_name", desc=False)
+        .execute()
+    ).data or []
+
+
+def get_schedule(schedule_id: str) -> Optional[Dict[str, Any]]:
+    """Fetch a single schedule definition by id."""
+    result = (
+        _orch_table("schedule_definitions")
+        .select("*")
+        .eq("id", str(schedule_id))
+        .limit(1)
+        .execute()
+    )
+    rows = result.data or []
+    return rows[0] if rows else None
+
+
+def update_schedule(schedule_id: str, **fields: Any) -> Dict[str, Any]:
+    """Update a schedule definition (is_active, cron_expression, etc)."""
+    allowed = {"is_active", "cron_expression", "run_config", "flow_name"}
+    patch = {k: v for k, v in fields.items() if k in allowed}
+    patch["updated_at"] = _utcnow()
+    if not patch or patch.keys() == {"updated_at"}:
+        return {}
+    result = (
+        _orch_table("schedule_definitions")
+        .update(patch)
+        .eq("id", str(schedule_id))
+        .execute()
+    )
+    return (result.data or [{}])[0]
+
+
+def list_all_event_triggers() -> List[Dict[str, Any]]:
+    """List ALL event trigger definitions (including inactive) for dashboard."""
+    return (
+        _orch_table("event_triggers")
+        .select("*")
+        .order("trigger_name", desc=False)
+        .execute()
+    ).data or []
+
+
+def update_event_trigger(trigger_id: str, **fields: Any) -> Dict[str, Any]:
+    """Update an event trigger definition (is_active, debounce_seconds, etc)."""
+    allowed = {"is_active", "debounce_seconds", "filter_config"}
+    patch = {k: v for k, v in fields.items() if k in allowed}
+    if not patch:
+        return {}
+    result = (
+        _orch_table("event_triggers")
+        .update(patch)
+        .eq("id", str(trigger_id))
+        .execute()
+    )
+    return (result.data or [{}])[0]
+
+
+# ══════════════════════════════════════════════════════
+# Data Sources
+# ══════════════════════════════════════════════════════
+
+def list_data_sources(
+    category: Optional[str] = None,
+    status: Optional[str] = None,
+    active_only: bool = False,
+) -> List[Dict[str, Any]]:
+    """List all data sources, optionally filtered by category/status."""
+    q = (
+        _orch_table("data_sources")
+        .select("*")
+        .order("category", desc=False)
+    )
+    if category:
+        q = q.eq("category", category)
+    if status:
+        q = q.eq("status", status)
+    if active_only:
+        q = q.eq("is_active", True)
+    return (q.execute()).data or []
+
+
+def get_data_source(source_id: str) -> Optional[Dict[str, Any]]:
+    """Fetch a single data source by id."""
+    result = (
+        _orch_table("data_sources")
+        .select("*")
+        .eq("id", str(source_id))
+        .limit(1)
+        .execute()
+    )
+    rows = result.data or []
+    return rows[0] if rows else None
+
+
+def get_data_source_by_name(source_name: str) -> Optional[Dict[str, Any]]:
+    """Fetch a single data source by source_name."""
+    result = (
+        _orch_table("data_sources")
+        .select("*")
+        .eq("source_name", source_name)
+        .limit(1)
+        .execute()
+    )
+    rows = result.data or []
+    return rows[0] if rows else None
+
+
+def update_data_source(source_id: str, **fields: Any) -> Dict[str, Any]:
+    """Update a data source (status, total_ingested, last_ingested_at, etc)."""
+    allowed = {"status", "total_ingested", "last_ingested_at", "is_active"}
+    patch = {k: v for k, v in fields.items() if k in allowed}
+    patch["updated_at"] = _utcnow()
+    if not patch or patch.keys() == {"updated_at"}:
+        return {}
+    result = (
+        _orch_table("data_sources")
+        .update(patch)
+        .eq("id", str(source_id))
+        .execute()
+    )
+    return (result.data or [{}])[0]
+
+
+# ══════════════════════════════════════════════════════
+# Data Source Cursors
+# ══════════════════════════════════════════════════════
+
+def list_data_source_cursors(
+    data_source_id: str,
+    limit: int = 20,
+) -> List[Dict[str, Any]]:
+    """List cursor records for a data source (most recent first)."""
+    return (
+        _orch_table("data_source_cursors")
+        .select("*")
+        .eq("data_source_id", str(data_source_id))
+        .order("created_at", desc=True)
+        .limit(limit)
+        .execute()
+    ).data or []
+
+
+def get_latest_cursor(data_source_id: str) -> Optional[Dict[str, Any]]:
+    """Get the most recent cursor for a data source (for resumable ingestion)."""
+    result = (
+        _orch_table("data_source_cursors")
+        .select("*")
+        .eq("data_source_id", str(data_source_id))
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    rows = result.data or []
+    return rows[0] if rows else None
+
+
+def create_data_source_cursor(
+    data_source_id: str,
+    cursor_start: int = 0,
+    cursor_end: int = 0,
+    batch_size: int = 100,
+    orchestration_run_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Create a new cursor batch record for tracking ingestion progress."""
+    payload: Dict[str, Any] = {
+        "data_source_id": str(data_source_id),
+        "cursor_type": "row_offset",
+        "cursor_start": cursor_start,
+        "cursor_end": cursor_end,
+        "batch_size": batch_size,
+        "status": "pending",
+        "records_processed": 0,
+        "records_written": 0,
+    }
+    if orchestration_run_id:
+        payload["orchestration_run_id"] = str(orchestration_run_id)
+    result = _orch_table("data_source_cursors").insert(payload).execute()
+    row = (result.data or [None])[0]
+    logger.info(
+        "Created data_source_cursor %s (source=%s, start=%d, end=%d)",
+        row["id"], data_source_id, cursor_start, cursor_end,
+    )
+    return row
+
+
+def update_data_source_cursor(cursor_id: str, **fields: Any) -> Dict[str, Any]:
+    """Update a cursor record (status, records_processed, etc)."""
+    allowed = {
+        "status", "cursor_end", "records_processed", "records_written",
+        "records_skipped", "records_failed", "error_message", "error_details",
+        "completed_at",
+    }
+    patch = {k: v for k, v in fields.items() if k in allowed}
+    if not patch:
+        return {}
+    result = (
+        _orch_table("data_source_cursors")
+        .update(patch)
+        .eq("id", str(cursor_id))
+        .execute()
+    )
+    return (result.data or [{}])[0]
 
 
 # ══════════════════════════════════════════════════════

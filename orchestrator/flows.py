@@ -47,6 +47,15 @@ from .pipelines import (
 logger = logging.getLogger(__name__)
 
 
+def _maybe_persist_logs(orch_run_id: str, **extra: Any) -> None:
+    """Fire-and-forget: persist run logs to storage. Never raises."""
+    try:
+        from .log_persister import persist_run_logs
+        persist_run_logs(orch_run_id, extra_metadata=extra if extra else None)
+    except Exception as exc:
+        logger.debug("Log persist skipped (non-fatal): %s", exc)
+
+
 class ConcurrentRunError(RuntimeError):
     """Raised when a flow is already running and cannot start a new one."""
     def __init__(self, flow_name: str):
@@ -313,6 +322,10 @@ def full_ingestion_flow(
             total_written=total_written, total_dq=total_dq,
         )
         results["_layer_timings"] = layer_timings
+
+        # Persist logs to storage (best-effort)
+        _maybe_persist_logs(orch_run_id, flow="full_ingestion")
+
         return results
 
     except Exception as exc:
@@ -327,6 +340,10 @@ def full_ingestion_flow(
             duration_seconds=round(time.time() - start, 2),
         )
         logger.error("❌ Full ingestion FAILED: %s", exc)
+
+        # Persist failure logs too
+        _maybe_persist_logs(orch_run_id, flow="full_ingestion", error=str(exc))
+
         raise
 
 
@@ -830,7 +847,7 @@ def multi_source_ingestion_flow(
     finally:
         loop.close()
 
-    return {
+    result = {
         "batch_id": batch_result.batch_id,
         "total_sources": batch_result.total_sources,
         "completed": batch_result.completed,
@@ -839,6 +856,12 @@ def multi_source_ingestion_flow(
         "concurrency_limit": batch_result.concurrency_limit,
         "source_results": batch_result.source_results,
     }
+
+    # Persist logs for all sub-runs (best-effort)
+    for run_id in (pre_created_run_ids or []):
+        _maybe_persist_logs(run_id, flow="multi_source_ingestion")
+
+    return result
 
 
 # ══════════════════════════════════════════════════════

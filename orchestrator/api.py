@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import json
 import logging
 import traceback
 from datetime import datetime, timedelta, timezone
@@ -26,6 +27,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.responses import StreamingResponse
 
 from . import db
 from .config import settings
@@ -714,6 +716,286 @@ async def pipeline_health(name: str):
         "last_run_status": last_run.get("status") if last_run else None,
         "last_run_at": last_run.get("started_at") if last_run else None,
     }
+
+
+# ══════════════════════════════════════════════════════
+# Flow Registry
+# ══════════════════════════════════════════════════════
+
+@app.get("/api/flows")
+async def list_flows():
+    """List all registered flows with metadata."""
+    from .flows import FLOW_REGISTRY
+    flows = []
+    for name, fn in FLOW_REGISTRY.items():
+        # Try @flow(description=...) first, then docstring
+        desc = ""
+        if hasattr(fn, "description") and fn.description:
+            desc = fn.description
+        elif fn.__doc__:
+            desc = fn.__doc__.strip().split("\n")[0]
+        flows.append({"name": name, "description": desc})
+    return {"flows": flows, "count": len(flows)}
+
+
+# ══════════════════════════════════════════════════════
+# Data Sources
+# ══════════════════════════════════════════════════════
+
+@app.get("/api/data-sources")
+async def list_data_sources(
+    category: Optional[str] = None,
+    status: Optional[str] = None,
+):
+    """List all data sources with latest cursor progress."""
+    sources = db.list_data_sources(category=category, status=status)
+    # Enrich each source with its latest cursor
+    for src in sources:
+        cursor = db.get_latest_cursor(src["id"])
+        src["latest_cursor"] = cursor
+    return {"data_sources": sources, "count": len(sources)}
+
+
+@app.get("/api/data-sources/{source_id}")
+async def get_data_source(source_id: str):
+    """Get a single data source with full cursor history."""
+    source = db.get_data_source(source_id)
+    if not source:
+        raise HTTPException(status_code=404, detail="Data source not found")
+    cursors = db.list_data_source_cursors(source_id, limit=50)
+    return {"source": source, "cursors": cursors}
+
+
+@app.post("/api/data-sources/{source_id}/ingest")
+async def trigger_data_source_ingest(
+    source_id: str,
+    request: Request,
+):
+    """Trigger ingestion for a data source from its current cursor position."""
+    import threading
+
+    source = db.get_data_source(source_id)
+    if not source:
+        raise HTTPException(status_code=404, detail="Data source not found")
+
+    body = await request.json()
+    batch_size = body.get("batch_size", 100)
+    dry_run = body.get("dry_run", False)
+
+    # Determine cursor start from latest completed cursor
+    latest = db.get_latest_cursor(source_id)
+    cursor_start = latest["cursor_end"] if latest else 0
+    remaining = (source.get("total_records") or 0) - cursor_start
+    if remaining <= 0:
+        return {"status": "skipped", "message": "All records already ingested"}
+
+    record_count = min(body.get("record_count", remaining), remaining)
+
+    # Pre-create orchestration run so we can return the ID immediately
+    orch_run = db.create_orchestration_run(
+        flow_name="full_ingestion",
+        trigger_type="api",
+        triggered_by="dashboard:/api/data-sources/ingest",
+        layers=["prebronze_to_bronze", "usda_nutrition_fetch", "bronze_to_silver", "silver_to_gold"],
+        config={
+            "batch_size": batch_size,
+            "dry_run": dry_run,
+            "cursor_start": cursor_start,
+            "record_count": record_count,
+            "data_source_id": source_id,
+        },
+        source_name=source["source_name"],
+    )
+    run_id = orch_run["id"]
+
+    # Dispatch in background
+    from .flows import FLOW_REGISTRY
+    flow_fn = FLOW_REGISTRY.get("full_ingestion")
+
+    def _run():
+        try:
+            flow_fn(
+                source_name=source["source_name"],
+                storage_bucket=source["storage_bucket"],
+                storage_path=source["storage_path"],
+                trigger_type="api",
+                triggered_by="dashboard:/api/data-sources/ingest",
+                config={"batch_size": batch_size, "dry_run": dry_run},
+                orch_run_id=run_id,
+            )
+        except Exception as exc:
+            logger.error("Data source ingest failed: %s", exc)
+
+    threading.Thread(target=_run, daemon=True).start()
+    return {"status": "started", "run_id": run_id, "source_name": source["source_name"]}
+
+
+# ══════════════════════════════════════════════════════
+# Schedules & Event Triggers
+# ══════════════════════════════════════════════════════
+
+@app.get("/api/schedules")
+async def list_schedules():
+    """List all schedule definitions."""
+    schedules = db.list_all_schedules()
+    return {"schedules": schedules, "count": len(schedules)}
+
+
+@app.post("/api/schedules/{schedule_id}/trigger")
+async def trigger_schedule(schedule_id: str):
+    """Manually execute a schedule's flow immediately."""
+    import threading
+
+    schedule = db.get_schedule(schedule_id)
+    if not schedule:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+
+    flow_name = schedule["flow_name"]
+    run_config = schedule.get("run_config", {}) or {}
+
+    from .flows import FLOW_REGISTRY
+    flow_fn = FLOW_REGISTRY.get(flow_name)
+    if not flow_fn:
+        raise HTTPException(status_code=400, detail=f"Unknown flow: {flow_name}")
+
+    # Pre-create run
+    orch_run = db.create_orchestration_run(
+        flow_name=flow_name,
+        trigger_type="manual_schedule",
+        triggered_by=f"dashboard:schedule:{schedule['schedule_name']}",
+        config=run_config,
+        source_name=run_config.get("source_name"),
+    )
+    run_id = orch_run["id"]
+
+    def _run():
+        try:
+            kwargs = {
+                "trigger_type": "manual_schedule",
+                "triggered_by": f"dashboard:schedule:{schedule['schedule_name']}",
+                "config": run_config,
+                "orch_run_id": run_id,
+            }
+            # Only pass source_name if the flow accepts it
+            if run_config.get("source_name"):
+                kwargs["source_name"] = run_config["source_name"]
+            flow_fn(**kwargs)
+        except Exception as exc:
+            logger.error("Manual schedule trigger failed: %s", exc)
+
+    threading.Thread(target=_run, daemon=True).start()
+    return {"status": "started", "run_id": run_id, "flow_name": flow_name}
+
+
+@app.patch("/api/schedules/{schedule_id}")
+async def update_schedule(schedule_id: str, request: Request):
+    """Update a schedule definition (toggle active, change cron, etc)."""
+    body = await request.json()
+    schedule = db.get_schedule(schedule_id)
+    if not schedule:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+    updated = db.update_schedule(schedule_id, **body)
+    return updated
+
+
+@app.get("/api/event-triggers")
+async def list_event_triggers():
+    """List all event trigger definitions."""
+    triggers = db.list_all_event_triggers()
+    return {"triggers": triggers, "count": len(triggers)}
+
+
+@app.patch("/api/event-triggers/{trigger_id}")
+async def update_event_trigger_endpoint(trigger_id: str, request: Request):
+    """Toggle an event trigger active/inactive."""
+    body = await request.json()
+    updated = db.update_event_trigger(trigger_id, **body)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Trigger not found")
+    return updated
+
+
+# ══════════════════════════════════════════════════════
+# SSE Log Streaming
+# ══════════════════════════════════════════════════════
+
+@app.get("/api/runs/{run_id}/logs")
+async def stream_run_logs(run_id: str):
+    """SSE stream of pipeline step logs for a running orchestration run.
+
+    Polls pipeline_step_logs every 2 seconds and sends new rows as
+    Server-Sent Events. Ends when the run reaches a terminal status.
+    """
+    orch_run = db.get_orchestration_run(run_id)
+    if not orch_run:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    async def event_generator():
+        last_seen_count = 0
+        terminal_statuses = {
+            "completed", "failed", "cancelled",
+            "timed_out", "partially_completed",
+        }
+
+        while True:
+            # Collect all step logs across pipeline runs
+            pipeline_runs = db.list_pipeline_runs(orchestration_run_id=run_id)
+            all_steps = []
+            for pr in pipeline_runs:
+                steps = db.list_step_logs(pipeline_run_id=pr["id"], limit=500)
+                for s in steps:
+                    s["pipeline_name"] = pr.get("pipeline_name", "")
+                all_steps.extend(steps)
+
+            # Sort by execution order
+            all_steps.sort(
+                key=lambda x: x.get("started_at") or x.get("created_at") or ""
+            )
+
+            # Send only new steps since last poll
+            new_steps = all_steps[last_seen_count:]
+            for step in new_steps:
+                level = "ERROR" if step.get("status") == "failed" else (
+                    "WARNING" if step.get("records_error", 0) > 0 else "INFO"
+                )
+                data = json.dumps({
+                    "type": "log",
+                    "timestamp": step.get("started_at") or step.get("created_at"),
+                    "level": level,
+                    "step": step.get("step_name", ""),
+                    "pipeline": step.get("pipeline_name", ""),
+                    "status": step.get("status", ""),
+                    "records_in": step.get("records_in", 0),
+                    "records_out": step.get("records_out", 0),
+                    "duration_ms": step.get("duration_ms"),
+                    "error": step.get("error_message"),
+                })
+                yield f"data: {data}\n\n"
+            last_seen_count = len(all_steps)
+
+            # Check if run reached terminal status
+            current_run = db.get_orchestration_run(run_id)
+            if current_run and current_run.get("status") in terminal_statuses:
+                final_data = json.dumps({
+                    "type": "complete",
+                    "status": current_run["status"],
+                    "duration_seconds": current_run.get("duration_seconds"),
+                    "total_records_written": current_run.get("total_records_written", 0),
+                })
+                yield f"data: {final_data}\n\n"
+                break
+
+            await asyncio.sleep(2)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 # ══════════════════════════════════════════════════════
