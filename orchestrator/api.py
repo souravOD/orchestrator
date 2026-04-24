@@ -415,16 +415,25 @@ async def trigger_batch(request: BatchTriggerRequest):
 async def list_runs(
     limit: int = 20,
     status: Optional[str] = None,
+    environment: Optional[str] = None,
 ):
     """List recent orchestration runs."""
+    if environment:
+        db.set_env(environment)
     runs = db.list_orchestration_runs(limit=limit, status=status)
+    if environment:
+        db.set_env("production")
     return {"runs": runs, "count": len(runs)}
 
 
 @app.get("/api/runs/{run_id}")
-async def get_run(run_id: str):
+async def get_run(run_id: str, environment: Optional[str] = None):
     """Get details of a specific orchestration run, including pipeline runs."""
+    if environment:
+        db.set_env(environment)
     orch_run = db.get_orchestration_run(run_id)
+    if environment:
+        db.set_env("production")
     if not orch_run:
         raise HTTPException(status_code=404, detail=f"Run not found: {run_id}")
     return orch_run
@@ -460,12 +469,18 @@ async def update_pipeline_settings(name: str, request: Request):
 
 
 @app.post("/api/runs/{run_id}/cancel")
-async def cancel_run(run_id: str):
+async def cancel_run(run_id: str, environment: Optional[str] = None):
     """Cancel a running orchestration flow (cooperative DB polling)."""
+    if environment:
+        db.set_env(environment)
     run = db.get_orchestration_run(run_id)
     if not run:
+        if environment:
+            db.set_env("production")
         raise HTTPException(status_code=404, detail="Run not found")
     if run["status"] not in ("pending", "running", "queued"):
+        if environment:
+            db.set_env("production")
         raise HTTPException(
             status_code=400,
             detail=f"Cannot cancel run with status '{run['status']}'",
@@ -475,13 +490,17 @@ async def cancel_run(run_id: str):
         status="cancelled",
         completed_at=datetime.now(timezone.utc).isoformat(),
     )
+    if environment:
+        db.set_env("production")
     logger.info("Cancelled orchestration run %s", run_id)
     return {"cancelled": True, "run_id": run_id}
 
 
 @app.post("/api/runs/{run_id}/retry")
-async def retry_run(run_id: str):
+async def retry_run(run_id: str, environment: Optional[str] = None):
     """Resume a failed run from the last completed layer."""
+    if environment:
+        db.set_env(environment)
     original = db.get_orchestration_run(run_id)
     if not original:
         raise HTTPException(status_code=404, detail="Run not found")
@@ -562,10 +581,14 @@ async def dashboard_stats():
 
 
 @app.get("/api/runs/{run_id}/steps")
-async def get_run_steps(run_id: str):
+async def get_run_steps(run_id: str, environment: Optional[str] = None):
     """Get pipeline runs and their step logs for a specific orchestration run."""
+    if environment:
+        db.set_env(environment)
     orch_run = db.get_orchestration_run(run_id)
     if not orch_run:
+        if environment:
+            db.set_env("production")
         raise HTTPException(status_code=404, detail=f"Run not found: {run_id}")
 
     pipeline_runs = db.list_pipeline_runs(orchestration_run_id=run_id)
@@ -574,6 +597,8 @@ async def get_run_steps(run_id: str):
     for pr in pipeline_runs:
         pr["steps"] = db.list_step_logs(pipeline_run_id=pr["id"])
 
+    if environment:
+        db.set_env("production")
     return {
         "orchestration_run": orch_run,
         "pipeline_runs": pipeline_runs,
@@ -1040,17 +1065,24 @@ async def update_event_trigger_endpoint(trigger_id: str, request: Request):
 # ══════════════════════════════════════════════════════
 
 @app.get("/api/runs/{run_id}/logs")
-async def stream_run_logs(run_id: str):
+async def stream_run_logs(run_id: str, environment: Optional[str] = None):
     """SSE stream of pipeline step logs for a running orchestration run.
 
     Polls pipeline_step_logs every 2 seconds and sends new rows as
     Server-Sent Events. Ends when the run reaches a terminal status.
     """
+    if environment:
+        db.set_env(environment)
     orch_run = db.get_orchestration_run(run_id)
     if not orch_run:
+        if environment:
+            db.set_env("production")
         raise HTTPException(status_code=404, detail="Run not found")
 
     async def event_generator():
+        # Ensure correct env is set for the streaming context
+        if environment:
+            db.set_env(environment)
         last_seen_count = 0
         terminal_statuses = {
             "completed", "failed", "cancelled",
