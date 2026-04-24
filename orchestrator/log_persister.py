@@ -31,7 +31,13 @@ from .config import settings
 logger = logging.getLogger(__name__)
 
 BUCKET = "orchestration-logs"
+TEST_BUCKET = "testing-orchestration-logs"
 RUN_PREFIX = "runs"
+
+
+def _get_log_bucket() -> str:
+    """Return the correct log bucket for the active environment."""
+    return TEST_BUCKET if db.get_env() == "testing" else BUCKET
 
 
 def _utcnow_iso() -> str:
@@ -55,11 +61,12 @@ def _upload_json(path: str, data: Any) -> bool:
     Returns True on success, False on failure (never raises).
     """
     try:
-        client = db.get_supabase_client()
+        client = db.get_storage_client()
+        bucket = _get_log_bucket()
         content = _to_json(data).encode("utf-8")
 
         # Use upsert to overwrite if exists (re-persist on retry)
-        client.storage.from_(BUCKET).upload(
+        client.storage.from_(bucket).upload(
             path,
             content,
             file_options={
@@ -67,7 +74,7 @@ def _upload_json(path: str, data: Any) -> bool:
                 "upsert": "true",
             },
         )
-        logger.debug("📦 Uploaded to %s/%s (%d bytes)", BUCKET, path, len(content))
+        logger.debug("📦 Uploaded to %s/%s (%d bytes)", bucket, path, len(content))
         return True
     except Exception as exc:
         logger.warning("⚠️ Log persist failed for %s: %s", path, exc)

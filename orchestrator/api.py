@@ -249,6 +249,10 @@ async def trigger_flow(request: TriggerRequest):
         else:
             layers = request.layers or ["bronze_to_silver"]
 
+        # ── Set environment BEFORE creating run so it lands in correct DB ──
+        environment = request.environment
+        db.set_env(environment)
+
         # ── Create the orchestration_runs row NOW so we can return run_id ──
         orch_run = db.create_orchestration_run(
             flow_name=request.flow_name,
@@ -286,7 +290,29 @@ async def trigger_flow(request: TriggerRequest):
             kwargs["source_name"] = source_name
 
         # Dispatch to background thread — API returns immediately.
-        asyncio.create_task(asyncio.to_thread(flow_fn, **kwargs))
+        def _run():
+            db.set_env(environment)  # re-set for thread context
+            # In test mode, prefix storage paths with testing/
+            if environment == "testing" and "storage_path" in kwargs:
+                kwargs["storage_path"] = f"testing/{kwargs.get('storage_path', '')}"
+            try:
+                flow_fn(**kwargs)
+            except Exception as exc:
+                logger.error("API trigger flow failed: %s", exc)
+                try:
+                    db.update_orchestration_run(
+                        orch_run_id,
+                        status="failed",
+                        total_errors=1,
+                        completed_at=db._utcnow(),
+                    )
+                except Exception as update_exc:
+                    logger.warning("Failed to mark trigger run %s as failed: %s", orch_run_id, update_exc)
+
+        asyncio.create_task(asyncio.to_thread(_run))
+
+        # Reset to production for subsequent API requests in this context
+        db.set_env("production")
 
         return {
             "status": "accepted",
@@ -389,16 +415,25 @@ async def trigger_batch(request: BatchTriggerRequest):
 async def list_runs(
     limit: int = 20,
     status: Optional[str] = None,
+    environment: Optional[str] = None,
 ):
     """List recent orchestration runs."""
+    if environment:
+        db.set_env(environment)
     runs = db.list_orchestration_runs(limit=limit, status=status)
+    if environment:
+        db.set_env("production")
     return {"runs": runs, "count": len(runs)}
 
 
 @app.get("/api/runs/{run_id}")
-async def get_run(run_id: str):
+async def get_run(run_id: str, environment: Optional[str] = None):
     """Get details of a specific orchestration run, including pipeline runs."""
+    if environment:
+        db.set_env(environment)
     orch_run = db.get_orchestration_run(run_id)
+    if environment:
+        db.set_env("production")
     if not orch_run:
         raise HTTPException(status_code=404, detail=f"Run not found: {run_id}")
     return orch_run
@@ -434,12 +469,18 @@ async def update_pipeline_settings(name: str, request: Request):
 
 
 @app.post("/api/runs/{run_id}/cancel")
-async def cancel_run(run_id: str):
+async def cancel_run(run_id: str, environment: Optional[str] = None):
     """Cancel a running orchestration flow (cooperative DB polling)."""
+    if environment:
+        db.set_env(environment)
     run = db.get_orchestration_run(run_id)
     if not run:
+        if environment:
+            db.set_env("production")
         raise HTTPException(status_code=404, detail="Run not found")
     if run["status"] not in ("pending", "running", "queued"):
+        if environment:
+            db.set_env("production")
         raise HTTPException(
             status_code=400,
             detail=f"Cannot cancel run with status '{run['status']}'",
@@ -449,13 +490,17 @@ async def cancel_run(run_id: str):
         status="cancelled",
         completed_at=datetime.now(timezone.utc).isoformat(),
     )
+    if environment:
+        db.set_env("production")
     logger.info("Cancelled orchestration run %s", run_id)
     return {"cancelled": True, "run_id": run_id}
 
 
 @app.post("/api/runs/{run_id}/retry")
-async def retry_run(run_id: str):
+async def retry_run(run_id: str, environment: Optional[str] = None):
     """Resume a failed run from the last completed layer."""
+    if environment:
+        db.set_env(environment)
     original = db.get_orchestration_run(run_id)
     if not original:
         raise HTTPException(status_code=404, detail="Run not found")
@@ -536,10 +581,14 @@ async def dashboard_stats():
 
 
 @app.get("/api/runs/{run_id}/steps")
-async def get_run_steps(run_id: str):
+async def get_run_steps(run_id: str, environment: Optional[str] = None):
     """Get pipeline runs and their step logs for a specific orchestration run."""
+    if environment:
+        db.set_env(environment)
     orch_run = db.get_orchestration_run(run_id)
     if not orch_run:
+        if environment:
+            db.set_env("production")
         raise HTTPException(status_code=404, detail=f"Run not found: {run_id}")
 
     pipeline_runs = db.list_pipeline_runs(orchestration_run_id=run_id)
@@ -548,6 +597,8 @@ async def get_run_steps(run_id: str):
     for pr in pipeline_runs:
         pr["steps"] = db.list_step_logs(pipeline_run_id=pr["id"])
 
+    if environment:
+        db.set_env("production")
     return {
         "orchestration_run": orch_run,
         "pipeline_runs": pipeline_runs,
@@ -756,6 +807,35 @@ async def list_data_sources(
     return {"data_sources": sources, "count": len(sources)}
 
 
+@app.get("/api/source-names")
+async def list_source_names():
+    """Lightweight list of source names for console dropdown."""
+    sources = db.list_data_sources(active_only=True)
+    return {
+        "sources": [
+            {
+                "source_name": s["source_name"],
+                "category": s["category"],
+                "status": s["status"],
+            }
+            for s in sources
+        ]
+    }
+
+
+@app.get("/api/test/status")
+async def test_env_status():
+    """Check if testing Supabase environment is configured."""
+    from .config import settings
+    configured = bool(
+        settings.supabase_test_url and settings.supabase_test_service_role_key
+    )
+    return {
+        "configured": configured,
+        "url": settings.supabase_test_url[:40] + "..." if configured else "",
+    }
+
+
 @app.get("/api/data-sources/{source_id}")
 async def get_data_source(source_id: str):
     """Get a single data source with full cursor history."""
@@ -772,6 +852,9 @@ async def trigger_data_source_ingest(
     request: Request,
 ):
     """Trigger ingestion for a data source from its current cursor position."""
+    # NOTE: Source metadata and cursor reads are INTENTIONALLY from production.
+    # The data_sources registry is the single source of truth in production.
+    # set_env() is called later to route only orchestration WRITES to test DB.
     source = db.get_data_source(source_id)
     if not source:
         raise HTTPException(status_code=404, detail="Data source not found")
@@ -788,6 +871,14 @@ async def trigger_data_source_ingest(
         return {"status": "skipped", "message": "All records already ingested"}
 
     record_count = min(body.get("record_count", remaining), remaining)
+
+    environment = body.get("environment", "production")
+    db.set_env(environment)  # set BEFORE creating run
+
+    storage_path = source["storage_path"]
+    # In test mode, prefix storage path to read from testing/ subfolder
+    if environment == "testing":
+        storage_path = f"testing/{storage_path}"
 
     # Pre-create orchestration run so we can return the ID immediately
     orch_run = db.create_orchestration_run(
@@ -811,11 +902,12 @@ async def trigger_data_source_ingest(
     flow_fn = FLOW_REGISTRY.get("full_ingestion")
 
     def _run():
+        db.set_env(environment)  # re-set for thread context
         try:
             flow_fn(
                 source_name=source["source_name"],
                 storage_bucket=source["storage_bucket"],
-                storage_path=source["storage_path"],
+                storage_path=storage_path,
                 trigger_type="api",
                 triggered_by="dashboard:/api/data-sources/ingest",
                 config={
@@ -840,6 +932,7 @@ async def trigger_data_source_ingest(
                 logger.warning("Failed to mark ingest run %s as failed: %s", run_id, update_exc)
 
     asyncio.create_task(asyncio.to_thread(_run))
+    db.set_env("production")  # reset for subsequent API requests
     return {"status": "started", "run_id": run_id, "source_name": source["source_name"]}
 
 
@@ -879,7 +972,10 @@ async def trigger_schedule(schedule_id: str):
                    f"which requires 'source_name' in run_config.",
         )
 
-    # Pre-create run
+    # Pre-create run — set env FIRST so it lands in correct DB
+    environment = run_config.get("environment", "production")
+    db.set_env(environment)
+
     orch_run = db.create_orchestration_run(
         flow_name=flow_name,
         trigger_type="manual_schedule",
@@ -890,6 +986,7 @@ async def trigger_schedule(schedule_id: str):
     run_id = orch_run["id"]
 
     def _run():
+        db.set_env(environment)  # re-set for thread context
         try:
             kwargs = {
                 "trigger_type": "manual_schedule",
@@ -912,6 +1009,10 @@ async def trigger_schedule(schedule_id: str):
                 if key in run_config:
                     kwargs[key] = run_config[key]
 
+            # In test mode, prefix storage paths with testing/
+            if environment == "testing" and "storage_path" in kwargs:
+                kwargs["storage_path"] = f"testing/{kwargs['storage_path']}"
+
             flow_fn(**kwargs)
         except Exception as exc:
             logger.error("Manual schedule trigger failed: %s", exc)
@@ -927,6 +1028,7 @@ async def trigger_schedule(schedule_id: str):
                 logger.warning("Failed to mark schedule run %s as failed: %s", run_id, update_exc)
 
     asyncio.create_task(asyncio.to_thread(_run))
+    db.set_env("production")  # reset for subsequent API requests
     return {"status": "started", "run_id": run_id, "flow_name": flow_name}
 
 
@@ -963,17 +1065,24 @@ async def update_event_trigger_endpoint(trigger_id: str, request: Request):
 # ══════════════════════════════════════════════════════
 
 @app.get("/api/runs/{run_id}/logs")
-async def stream_run_logs(run_id: str):
+async def stream_run_logs(run_id: str, environment: Optional[str] = None):
     """SSE stream of pipeline step logs for a running orchestration run.
 
     Polls pipeline_step_logs every 2 seconds and sends new rows as
     Server-Sent Events. Ends when the run reaches a terminal status.
     """
+    if environment:
+        db.set_env(environment)
     orch_run = db.get_orchestration_run(run_id)
     if not orch_run:
+        if environment:
+            db.set_env("production")
         raise HTTPException(status_code=404, detail="Run not found")
 
     async def event_generator():
+        # Ensure correct env is set for the streaming context
+        if environment:
+            db.set_env(environment)
         last_seen_count = 0
         terminal_statuses = {
             "completed", "failed", "cancelled",

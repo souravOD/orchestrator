@@ -12,20 +12,48 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
+import contextvars
+
 from .config import settings
 
 logger = logging.getLogger(__name__)
 
-# ── Supabase client singleton ─────────────────────────
+# ── Environment context ──────────────────────────────
+# Controls which Supabase project is used for DB operations.
+# Defaults to "production"; set to "testing" at the API/flow layer.
+_active_env: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "_active_env", default="production"
+)
 
-_client = None
+
+_VALID_ENVS = {"production", "testing"}
 
 
-def get_supabase_client():
-    """Return a cached Supabase client instance."""
-    global _client
-    if _client is not None:
-        return _client
+def set_env(env: str = "production") -> None:
+    """Set the active environment for the current async context / thread."""
+    if env not in _VALID_ENVS:
+        raise ValueError(
+            f"Invalid environment '{env}'. Must be one of: {_VALID_ENVS}"
+        )
+    _active_env.set(env)
+
+
+def get_env() -> str:
+    """Return the current active environment."""
+    return _active_env.get()
+
+
+# ── Supabase client singletons ───────────────────────
+
+_prod_client = None
+_test_client = None
+
+
+def _get_prod_client():
+    """Return a cached production Supabase client."""
+    global _prod_client
+    if _prod_client is not None:
+        return _prod_client
     try:
         from supabase import create_client
     except ImportError:
@@ -36,9 +64,50 @@ def get_supabase_client():
         raise RuntimeError(
             "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set in .env"
         )
-    _client = create_client(settings.supabase_url, settings.supabase_service_role_key)
-    logger.info("Supabase client initialised for %s", settings.supabase_url)
-    return _client
+    _prod_client = create_client(settings.supabase_url, settings.supabase_service_role_key)
+    logger.info("Supabase PRODUCTION client initialised for %s", settings.supabase_url)
+    return _prod_client
+
+
+def _get_test_client():
+    """Return a cached testing Supabase client."""
+    global _test_client
+    if _test_client is not None:
+        return _test_client
+    try:
+        from supabase import create_client
+    except ImportError:
+        raise ImportError(
+            "supabase is not installed. Run: pip install supabase"
+        )
+    if not settings.supabase_test_url or not settings.supabase_test_service_role_key:
+        raise RuntimeError(
+            "SUPABASE_TEST_URL and SUPABASE_TEST_SERVICE_ROLE_KEY must be set "
+            "to use the testing environment"
+        )
+    _test_client = create_client(settings.supabase_test_url, settings.supabase_test_service_role_key)
+    logger.info("Supabase TESTING client initialised for %s", settings.supabase_test_url)
+    return _test_client
+
+
+def get_supabase_client():
+    """Return cached Supabase client for the ACTIVE environment.
+
+    Call ``set_env("testing")`` before invoking this in a test context.
+    """
+    env = _active_env.get()
+    if env == "testing":
+        return _get_test_client()
+    return _get_prod_client()
+
+
+def get_storage_client():
+    """Return the PRODUCTION Supabase client for storage-bucket access.
+
+    Storage buckets (raw-data, orchestration-logs, testing-orchestration-logs)
+    always live in the production project.
+    """
+    return _get_prod_client()
 
 
 def _orch_table(table_name: str):

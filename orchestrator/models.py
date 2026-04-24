@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -229,6 +229,7 @@ class TriggerRequest(BaseModel):
     batch_size: int = 100
     incremental: bool = True
     dry_run: bool = False
+    environment: Literal["production", "testing"] = "production"
 
 
 class BatchSourceConfig(BaseModel):

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { api, FlowDefinition } from "@/lib/api";
+import { api, FlowDefinition, SourceNameItem, TestStatus } from "@/lib/api";
 import Terminal from "@/components/Terminal";
 
 // Flows that support source_name parameter
@@ -72,6 +72,13 @@ export default function ConsolePage() {
     const [workers, setWorkers] = useState(5);
     const [layer, setLayer] = useState("prebronze_to_bronze");
 
+    // Source names from API
+    const [sourceNames, setSourceNames] = useState<SourceNameItem[]>([]);
+
+    // Environment toggle
+    const [environment, setEnvironment] = useState<"production" | "testing">("production");
+    const [testConfigured, setTestConfigured] = useState(false);
+
     // Execution state
     const [executing, setExecuting] = useState(false);
     const [activeRunId, setActiveRunId] = useState<string | null>(null);
@@ -79,14 +86,20 @@ export default function ConsolePage() {
     const [error, setError] = useState<string | null>(null);
     const [history, setHistory] = useState<HistoryItem[]>([]);
 
-    // Load flows
+    // Load flows, source names, and test status
     useEffect(() => {
         async function load() {
             try {
-                const data = await api.listFlows();
-                setFlows(data.flows);
+                const [flowData, sourceData, testStatus] = await Promise.all([
+                    api.listFlows(),
+                    api.listSourceNames(),
+                    api.getTestStatus(),
+                ]);
+                setFlows(flowData.flows);
+                setSourceNames(sourceData.sources);
+                setTestConfigured(testStatus.configured);
             } catch (err) {
-                console.error("Failed to load flows:", err);
+                console.error("Failed to load console data:", err);
             } finally {
                 setLoading(false);
             }
@@ -125,6 +138,7 @@ export default function ConsolePage() {
                 batch_size: batchSize,
                 incremental,
                 dry_run: dryRun,
+                environment,
             };
 
             if (SOURCE_FLOWS.has(selectedFlow) && sourceName) {
@@ -161,7 +175,7 @@ export default function ConsolePage() {
             setError(err instanceof Error ? err.message : String(err));
             setExecuting(false);
         }
-    }, [selectedFlow, sourceName, batchSize, incremental, dryRun, workers, layer, history]);
+    }, [selectedFlow, sourceName, batchSize, incremental, dryRun, workers, layer, history, environment]);
 
     const handleComplete = useCallback((status: string) => {
         setExecuting(false);
@@ -197,7 +211,71 @@ export default function ConsolePage() {
 
             <div className="console-layout">
                 {/* Config Panel */}
-                <div className="config-panel">
+                <div className="config-panel" style={environment === "testing" ? { borderColor: "rgba(245, 158, 11, 0.4)", boxShadow: "0 0 12px rgba(245, 158, 11, 0.1)" } : undefined}>
+                    {/* Environment Toggle */}
+                    {testConfigured && (
+                        <div className="config-section">
+                            <div className="config-section-title">Environment</div>
+                            <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+                                <button
+                                    id="env-production"
+                                    style={{
+                                        flex: 1,
+                                        padding: "8px 12px",
+                                        border: "1px solid",
+                                        borderColor: environment === "production" ? "var(--accent-green)" : "var(--border)",
+                                        borderRadius: 8,
+                                        background: environment === "production" ? "rgba(34, 197, 94, 0.12)" : "transparent",
+                                        color: environment === "production" ? "var(--accent-green)" : "var(--text-muted)",
+                                        cursor: executing ? "not-allowed" : "pointer",
+                                        fontSize: 13,
+                                        fontWeight: 600,
+                                        transition: "all 0.2s ease",
+                                    }}
+                                    onClick={() => !executing && setEnvironment("production")}
+                                    disabled={executing}
+                                >
+                                    🟢 Production
+                                </button>
+                                <button
+                                    id="env-testing"
+                                    style={{
+                                        flex: 1,
+                                        padding: "8px 12px",
+                                        border: "1px solid",
+                                        borderColor: environment === "testing" ? "rgb(245, 158, 11)" : "var(--border)",
+                                        borderRadius: 8,
+                                        background: environment === "testing" ? "rgba(245, 158, 11, 0.12)" : "transparent",
+                                        color: environment === "testing" ? "rgb(245, 158, 11)" : "var(--text-muted)",
+                                        cursor: executing ? "not-allowed" : "pointer",
+                                        fontSize: 13,
+                                        fontWeight: 600,
+                                        transition: "all 0.2s ease",
+                                    }}
+                                    onClick={() => !executing && setEnvironment("testing")}
+                                    disabled={executing}
+                                >
+                                    🧪 Testing
+                                </button>
+                            </div>
+                            {environment === "testing" && (
+                                <div
+                                    style={{
+                                        marginTop: 8,
+                                        padding: "6px 10px",
+                                        borderRadius: 6,
+                                        background: "rgba(245, 158, 11, 0.08)",
+                                        border: "1px solid rgba(245, 158, 11, 0.2)",
+                                        fontSize: 11,
+                                        color: "rgb(245, 158, 11)",
+                                    }}
+                                >
+                                    ⚠️ Test mode — writes to test DB, reads from testing/ subfolder
+                                </div>
+                            )}
+                        </div>
+                    )}
+
                     <div className="config-section">
                         <div className="config-section-title">Flow Configuration</div>
 
@@ -230,15 +308,22 @@ export default function ConsolePage() {
                         {SOURCE_FLOWS.has(selectedFlow) && (
                             <div className="form-group" style={{ marginTop: 12 }}>
                                 <label className="form-label">Source Name</label>
-                                <input
+                                <select
                                     id="source-name"
-                                    type="text"
-                                    className="form-input"
-                                    placeholder="e.g. food_com_recipes"
+                                    className="form-select"
                                     value={sourceName}
                                     onChange={(e) => setSourceName(e.target.value)}
                                     disabled={executing}
-                                />
+                                >
+                                    <option value="">— select source —</option>
+                                    {sourceNames
+                                        .filter((s) => s.status !== "archived")
+                                        .map((s) => (
+                                            <option key={s.source_name} value={s.source_name}>
+                                                {s.source_name} ({s.category})
+                                            </option>
+                                        ))}
+                                </select>
                             </div>
                         )}
 
@@ -328,9 +413,14 @@ export default function ConsolePage() {
                         className={`btn-execute ${executing ? "running" : ""}`}
                         onClick={handleExecute}
                         disabled={executing || loading}
+                        style={environment === "testing" && !executing ? {
+                            background: "linear-gradient(135deg, rgb(245, 158, 11), rgb(217, 119, 6))",
+                        } : undefined}
                     >
                         {executing ? (
                             <>⏳ Running...</>
+                        ) : environment === "testing" ? (
+                            <>🧪 Execute (Test)</>
                         ) : (
                             <>▶ Execute</>
                         )}

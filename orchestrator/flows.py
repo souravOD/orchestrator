@@ -578,15 +578,30 @@ def _load_input(path: str) -> List[Dict[str, Any]]:
     if path.startswith("storage://"):
         parts = path.replace("storage://", "").split("/", 1)
         bucket, file_path = parts[0], parts[1]
-        try:
-            _ensure_pipeline_on_path("prebronze-to-bronze")
-            from prebronze.orchestrator import load_input_from_storage
-            return load_input_from_storage(bucket, file_path)
-        except ImportError:
-            raise ImportError(
-                "PreBronze pipeline's load_input_from_storage() is not available. "
-                "Install the prebronze-to-bronze package or contact the PreBronze team."
-            )
+
+        # Always use PRODUCTION client for storage — buckets live there
+        client = db.get_storage_client()
+        logger.info("📥 Downloading from storage: %s/%s", bucket, file_path)
+        file_bytes = client.storage.from_(bucket).download(file_path)
+
+        suffix = Path(file_path).suffix.lower()
+        text = file_bytes.decode("utf-8")
+
+        if suffix == ".csv":
+            import csv, io
+            reader = csv.DictReader(io.StringIO(text))
+            return list(reader)
+        elif suffix == ".json":
+            data = json.loads(text)
+            if isinstance(data, list):
+                return data
+            if isinstance(data, dict) and all(isinstance(v, dict) for v in data.values()):
+                return list(data.values())
+            return [data]
+        elif suffix in (".ndjson", ".jsonl"):
+            return [json.loads(line) for line in text.splitlines() if line.strip()]
+        else:
+            raise ValueError(f"Unsupported storage file format: {suffix}")
 
     file_path = Path(path)
     if not file_path.exists():
