@@ -114,13 +114,14 @@ export default function ConsolePage() {
     // Re-fetch source names when environment toggles
     useEffect(() => {
         let isCurrent = true;
+        // Clear immediately to prevent stale-env execution during fetch
+        setSourceName("");
+        setSourceNames([]);
         async function loadSources() {
             try {
                 const sourceData = await api.listSourceNames(environment);
                 if (!isCurrent) return;
                 setSourceNames(sourceData.sources);
-                // Reset selection when source list changes
-                setSourceName("");
             } catch (err) {
                 console.error("Failed to load source names:", err);
             }
