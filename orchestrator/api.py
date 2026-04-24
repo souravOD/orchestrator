@@ -286,7 +286,16 @@ async def trigger_flow(request: TriggerRequest):
             kwargs["source_name"] = source_name
 
         # Dispatch to background thread — API returns immediately.
-        asyncio.create_task(asyncio.to_thread(flow_fn, **kwargs))
+        environment = request.environment
+
+        def _run():
+            db.set_env(environment)
+            # In test mode, prefix storage paths with testing/
+            if environment == "testing" and "storage_bucket" in kwargs:
+                kwargs["storage_path"] = f"testing/{kwargs.get('storage_path', '')}"
+            flow_fn(**kwargs)
+
+        asyncio.create_task(asyncio.to_thread(_run))
 
         return {
             "status": "accepted",
@@ -756,6 +765,35 @@ async def list_data_sources(
     return {"data_sources": sources, "count": len(sources)}
 
 
+@app.get("/api/source-names")
+async def list_source_names():
+    """Lightweight list of source names for console dropdown."""
+    sources = db.list_data_sources(active_only=True)
+    return {
+        "sources": [
+            {
+                "source_name": s["source_name"],
+                "category": s["category"],
+                "status": s["status"],
+            }
+            for s in sources
+        ]
+    }
+
+
+@app.get("/api/test/status")
+async def test_env_status():
+    """Check if testing Supabase environment is configured."""
+    from .config import settings
+    configured = bool(
+        settings.supabase_test_url and settings.supabase_test_service_role_key
+    )
+    return {
+        "configured": configured,
+        "url": settings.supabase_test_url[:40] + "..." if configured else "",
+    }
+
+
 @app.get("/api/data-sources/{source_id}")
 async def get_data_source(source_id: str):
     """Get a single data source with full cursor history."""
@@ -810,12 +848,19 @@ async def trigger_data_source_ingest(
     from .flows import FLOW_REGISTRY
     flow_fn = FLOW_REGISTRY.get("full_ingestion")
 
+    environment = body.get("environment", "production")
+    storage_path = source["storage_path"]
+    # In test mode, prefix storage path to read from testing/ subfolder
+    if environment == "testing":
+        storage_path = f"testing/{storage_path}"
+
     def _run():
+        db.set_env(environment)
         try:
             flow_fn(
                 source_name=source["source_name"],
                 storage_bucket=source["storage_bucket"],
-                storage_path=source["storage_path"],
+                storage_path=storage_path,
                 trigger_type="api",
                 triggered_by="dashboard:/api/data-sources/ingest",
                 config={
@@ -889,7 +934,10 @@ async def trigger_schedule(schedule_id: str):
     )
     run_id = orch_run["id"]
 
+    environment = run_config.get("environment", "production")
+
     def _run():
+        db.set_env(environment)
         try:
             kwargs = {
                 "trigger_type": "manual_schedule",

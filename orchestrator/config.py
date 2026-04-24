@@ -16,9 +16,13 @@ from pydantic_settings import BaseSettings
 class OrchestratorSettings(BaseSettings):
     """Central configuration loaded from environment variables / .env file."""
 
-    # ── Supabase ──────────────────────────────────────
+    # ── Supabase (production) ────────────────────────
     supabase_url: str = ""
     supabase_service_role_key: str = ""
+
+    # ── Supabase (testing – separate project) ─────
+    supabase_test_url: str = ""
+    supabase_test_service_role_key: str = ""
 
     # ── OpenAI (for LLM-augmented pipeline steps) ────
     openai_api_key: Optional[str] = None

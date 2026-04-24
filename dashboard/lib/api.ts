@@ -97,6 +97,17 @@ export interface PipelineDefinition {
     timeout_seconds: number | null;
 }
 
+export interface SourceNameItem {
+    source_name: string;
+    category: string;
+    status: string;
+}
+
+export interface TestStatus {
+    configured: boolean;
+    url: string;
+}
+
 export interface DeadLetter {
     id: string;
     payload: Record<string, unknown>;
@@ -223,6 +234,12 @@ export const api = {
             "/api/trigger",
             { method: "POST", body: JSON.stringify(payload) }
         ),
+
+    listSourceNames: () =>
+        fetchApi<{ sources: SourceNameItem[] }>("/api/source-names"),
+
+    getTestStatus: () =>
+        fetchApi<TestStatus>("/api/test/status"),
 
     // ── Data Sources ───────────────────────────────────
 

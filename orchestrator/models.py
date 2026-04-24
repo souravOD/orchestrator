@@ -229,6 +229,7 @@ class TriggerRequest(BaseModel):
     batch_size: int = 100
     incremental: bool = True
     dry_run: bool = False
+    environment: str = "production"  # "production" or "testing"
 
 
 class BatchSourceConfig(BaseModel):
