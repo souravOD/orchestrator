@@ -810,11 +810,15 @@ async def list_data_sources(
 @app.get("/api/source-names")
 async def list_source_names(environment: Optional[str] = None):
     """Lightweight list of source names for console dropdown."""
-    if environment:
-        db.set_env(environment)
-    sources = db.list_data_sources(active_only=True)
-    if environment:
-        db.set_env("production")
+    if environment and environment not in ("production", "testing"):
+        raise HTTPException(status_code=400, detail=f"Invalid environment: {environment}")
+    try:
+        if environment:
+            db.set_env(environment)
+        sources = db.list_data_sources(active_only=True)
+    finally:
+        if environment:
+            db.set_env("production")
     return {
         "sources": [
             {

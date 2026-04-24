@@ -113,9 +113,11 @@ export default function ConsolePage() {
 
     // Re-fetch source names when environment toggles
     useEffect(() => {
+        let isCurrent = true;
         async function loadSources() {
             try {
                 const sourceData = await api.listSourceNames(environment);
+                if (!isCurrent) return;
                 setSourceNames(sourceData.sources);
                 // Reset selection when source list changes
                 setSourceName("");
@@ -124,6 +126,9 @@ export default function ConsolePage() {
             }
         }
         loadSources();
+        return () => {
+            isCurrent = false;
+        };
     }, [environment]);
 
     const currentFlowDesc = flows.find((f) => f.name === selectedFlow)?.description || "";

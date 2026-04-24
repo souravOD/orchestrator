@@ -237,7 +237,7 @@ export const api = {
 
     listSourceNames: (environment?: string) =>
         fetchApi<{ sources: SourceNameItem[] }>(
-            `/api/source-names${environment ? `?environment=${environment}` : ""}`
+            `/api/source-names${environment ? `?environment=${encodeURIComponent(environment)}` : ""}`
         ),
 
     getTestStatus: () =>
