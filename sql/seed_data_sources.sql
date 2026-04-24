@@ -36,7 +36,8 @@ VALUES
     ('usda_fruits', 'recipes', 'raw-data', 'recipes/usda-fruits/usda_fruits_as_recipes.csv',
      'csv', 36032, 136, 'raw_recipes',
      'USDA fruits formatted as recipe records',
-     '{usda, fruits, synthetic}', 'ingesting', 100);
+     '{usda, fruits, synthetic}', 'ingesting', 100)
+ON CONFLICT (storage_bucket, storage_path) DO NOTHING;
 
 -- ── PRODUCTS: Partially Ingested ─────────────────────
 
@@ -48,7 +49,8 @@ VALUES
     ('off_products_batch_1', 'products', 'raw-data', 'products/off-batch-1/off_batch_1_of_2.ndjson',
      'ndjson', 331088876, 12118, 'raw_products',
      'OpenFoodFacts Batch 1 — full product data (12.1K). 3K sample was a subset of this file.',
-     '{off, batch-1, full, products}', 'ingesting', 3500);
+     '{off, batch-1, full, products}', 'ingesting', 3500)
+ON CONFLICT (storage_bucket, storage_path) DO NOTHING;
 
 -- ── RECIPES: Not Yet Ingested ────────────────────────
 
@@ -80,7 +82,8 @@ VALUES
     ('indian_recipes_500', 'recipes', 'raw-data', 'recipes/indian-500/indian_recipes_500.csv',
      'csv', 704830, 570, 'raw_recipes',
      '500 Indian recipes (CSV, same schema as Food.com)',
-     '{indian, medium}', 'available', 0);
+     '{indian, medium}', 'available', 0)
+ON CONFLICT (storage_bucket, storage_path) DO NOTHING;
 
 -- ── PRODUCTS: Not Yet Ingested ───────────────────────
 
@@ -92,7 +95,8 @@ VALUES
     ('off_products_batch_2', 'products', 'raw-data', 'products/off-batch-2/off_batch_2_of_2.ndjson',
      'ndjson', 368991144, 12118, 'raw_products',
      'OpenFoodFacts Batch 2 — full product data (12.1K products, 352 MB)',
-     '{off, batch-2, full, products}', 'available', 0);
+     '{off, batch-2, full, products}', 'available', 0)
+ON CONFLICT (storage_bucket, storage_path) DO NOTHING;
 
 -- ── ARCHIVED: Sample Subsets (kept for audit trail) ──
 
@@ -109,7 +113,8 @@ VALUES
     ('off_products_sample_3k', 'products', 'raw-data', 'products/off-sample/off_batch_1_of_2_skip500_take3000.ndjson',
      'ndjson', 80049920, 2999, 'raw_products',
      'ARCHIVED — 3K sample subset of off_products_batch_1. Data now tracked under parent source.',
-     '{off, sample, archived}', 'archived', FALSE, 2999);
+     '{off, sample, archived}', 'archived', FALSE, 2999)
+ON CONFLICT (storage_bucket, storage_path) DO NOTHING;
 
 -- ── Set parent_source_id for archived samples ────────
 
