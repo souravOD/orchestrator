@@ -235,8 +235,10 @@ export const api = {
             { method: "POST", body: JSON.stringify(payload) }
         ),
 
-    listSourceNames: () =>
-        fetchApi<{ sources: SourceNameItem[] }>("/api/source-names"),
+    listSourceNames: (environment?: string) =>
+        fetchApi<{ sources: SourceNameItem[] }>(
+            `/api/source-names${environment ? `?environment=${encodeURIComponent(environment)}` : ""}`
+        ),
 
     getTestStatus: () =>
         fetchApi<TestStatus>("/api/test/status"),

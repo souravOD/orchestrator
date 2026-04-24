@@ -86,17 +86,15 @@ export default function ConsolePage() {
     const [error, setError] = useState<string | null>(null);
     const [history, setHistory] = useState<HistoryItem[]>([]);
 
-    // Load flows, source names, and test status
+    // Load flows and test status (once on mount)
     useEffect(() => {
         async function load() {
             try {
-                const [flowData, sourceData, testStatus] = await Promise.all([
+                const [flowData, testStatus] = await Promise.all([
                     api.listFlows(),
-                    api.listSourceNames(),
                     api.getTestStatus(),
                 ]);
                 setFlows(flowData.flows);
-                setSourceNames(sourceData.sources);
                 setTestConfigured(testStatus.configured);
             } catch (err) {
                 console.error("Failed to load console data:", err);
@@ -112,6 +110,27 @@ export default function ConsolePage() {
             if (stored) setHistory(JSON.parse(stored));
         } catch { /* ignore */ }
     }, []);
+
+    // Re-fetch source names when environment toggles
+    useEffect(() => {
+        let isCurrent = true;
+        // Clear immediately to prevent stale-env execution during fetch
+        setSourceName("");
+        setSourceNames([]);
+        async function loadSources() {
+            try {
+                const sourceData = await api.listSourceNames(environment);
+                if (!isCurrent) return;
+                setSourceNames(sourceData.sources);
+            } catch (err) {
+                console.error("Failed to load source names:", err);
+            }
+        }
+        loadSources();
+        return () => {
+            isCurrent = false;
+        };
+    }, [environment]);
 
     const currentFlowDesc = flows.find((f) => f.name === selectedFlow)?.description || "";
 
