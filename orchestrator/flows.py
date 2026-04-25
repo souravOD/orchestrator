@@ -170,9 +170,6 @@ def full_ingestion_flow(
         orch_run_id = orch_run["id"]
         logger.info("🔄 Orchestration run %s — full_ingestion started", orch_run_id)
 
-    # Per-source concurrency guard (exclude this run to avoid self-deadlock)
-    _guard_concurrent("full_ingestion", source_name=source_name, exclude_run_id=orch_run_id)
-
     results: Dict[str, Any] = {}
     layer_timings: Dict[str, float] = {}
     total_written = 0
@@ -187,6 +184,10 @@ def full_ingestion_flow(
         logger.info("⏭️ Resuming from run %s. Skipping: %s", resume_from_run_id, completed_layers)
 
     try:
+        # Per-source concurrency guard (exclude this run to avoid self-deadlock).
+        # Must be inside try so ConcurrentRunError marks the run as "failed"
+        # instead of leaving an orphaned "running" record.
+        _guard_concurrent("full_ingestion", source_name=source_name, exclude_run_id=orch_run_id)
         # ── Layer 1: PreBronze → Bronze ──
         if "prebronze_to_bronze" not in completed_layers:
             layer_start = time.time()
