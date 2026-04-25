@@ -79,6 +79,28 @@ def _stream_pipe(pipe, level: str, pipeline_name: str, accumulator: List[str]) -
     pipe.close()
 
 
+def _env_overrides_for_active_env() -> Dict[str, str]:
+    """Build env var overrides to route pipeline subprocesses to the correct Supabase.
+
+    When the orchestrator is running in 'testing' mode, this returns overrides
+    for SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY pointing at the test instance.
+    In production mode, returns an empty dict (inherits parent env).
+    """
+    if db.get_env() == "testing":
+        from .config import settings
+        if settings.supabase_test_url and settings.supabase_test_service_role_key:
+            logger.info("🧪 Routing subprocess data to TEST Supabase: %s",
+                        settings.supabase_test_url[:50])
+            return {
+                "SUPABASE_URL": settings.supabase_test_url,
+                "SUPABASE_SERVICE_ROLE_KEY": settings.supabase_test_service_role_key,
+                "SUPABASE_KEY": settings.supabase_test_service_role_key,
+            }
+        logger.warning("Testing env active but SUPABASE_TEST_URL not configured — "
+                        "subprocess will use production Supabase!")
+    return {}
+
+
 def _run_pipeline_subprocess(
     module: str,
     cli_args: List[str],
@@ -432,6 +454,7 @@ def run_prebronze_to_bronze(
             timeout=timeout,
             pipeline_name="prebronze_to_bronze",
             env_overrides={
+                **_env_overrides_for_active_env(),
                 "OPENAI_MODEL_NAME": cfg.get("prebronze_model_name", os.environ.get("OPENAI_MODEL_NAME", "openai/gpt-4o-mini")),
                 # Only override API key if explicitly provided; otherwise inherit from parent env
                 **({"OPENAI_API_KEY": cfg["prebronze_api_key"]} if cfg.get("prebronze_api_key") else {}),
@@ -597,6 +620,7 @@ def run_usda_nutrition_fetch(
             timeout=timeout,
             pipeline_name="usda_nutrition_fetch",
             env_overrides={
+                **_env_overrides_for_active_env(),
                 "OPENAI_MODEL_NAME": usda_model,
                 # Only override API key if explicitly provided; otherwise inherit from parent env
                 **({"OPENAI_API_KEY": cfg["usda_api_key"]} if cfg.get("usda_api_key") else {}),
@@ -720,6 +744,7 @@ def run_bronze_to_silver(
             cli_args=cli_args,
             timeout=timeout,
             pipeline_name="bronze_to_silver",
+            env_overrides=_env_overrides_for_active_env(),
         )
 
         # Parse structured result from stdout (best-effort)
@@ -832,6 +857,7 @@ def run_silver_to_gold(
             cli_args=cli_args,
             timeout=timeout,
             pipeline_name="silver_to_gold",
+            env_overrides=_env_overrides_for_active_env(),
         )
 
         # Parse structured result from stdout (best-effort)

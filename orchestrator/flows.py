@@ -62,13 +62,19 @@ class ConcurrentRunError(RuntimeError):
         super().__init__(f"Flow '{flow_name}' is already running. Concurrent runs are not allowed.")
 
 
-def _guard_concurrent(flow_name: str, source_name: Optional[str] = None) -> None:
+def _guard_concurrent(
+    flow_name: str,
+    source_name: Optional[str] = None,
+    exclude_run_id: Optional[str] = None,
+) -> None:
     """Raise ConcurrentRunError if the flow already has a running run.
 
     When *source_name* is provided, the guard is per-source so that
     different sources can run the same flow in parallel.
+    When *exclude_run_id* is provided, that run is excluded from the
+    check (prevents self-deadlock when the run is pre-created).
     """
-    if db.has_running_flow(flow_name, source_name=source_name):
+    if db.has_running_flow(flow_name, source_name=source_name, exclude_run_id=exclude_run_id):
         label = f"{flow_name}/{source_name}" if source_name else flow_name
         raise ConcurrentRunError(label)
 
@@ -128,9 +134,6 @@ def full_ingestion_flow(
         cfg["vendor_id"] = vendor_id
     start = time.time()
 
-    # Per-source concurrency guard
-    _guard_concurrent("full_ingestion", source_name=source_name)
-
     # If storage params provided, build a storage:// URI for _load_input
     if raw_input is None and storage_bucket and storage_path:
         input_path = f"storage://{storage_bucket}/{storage_path}"
@@ -166,6 +169,9 @@ def full_ingestion_flow(
         )
         orch_run_id = orch_run["id"]
         logger.info("🔄 Orchestration run %s — full_ingestion started", orch_run_id)
+
+    # Per-source concurrency guard (exclude this run to avoid self-deadlock)
+    _guard_concurrent("full_ingestion", source_name=source_name, exclude_run_id=orch_run_id)
 
     results: Dict[str, Any] = {}
     layer_timings: Dict[str, float] = {}
