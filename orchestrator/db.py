@@ -215,6 +215,7 @@ def update_orchestration_run(
     total_errors: Optional[int] = None,
     completed_at: Optional[str] = None,
     duration_seconds: Optional[float] = None,
+    error_message: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Update fields on an orchestration_run."""
     patch: Dict[str, Any] = {}
@@ -234,6 +235,8 @@ def update_orchestration_run(
         patch["completed_at"] = completed_at
     if duration_seconds is not None:
         patch["duration_seconds"] = duration_seconds
+    if error_message is not None:
+        patch["error_message"] = error_message
     if not patch:
         return {}
     result = (
@@ -794,11 +797,13 @@ def update_pipeline_definition(
 # Concurrent Run Prevention
 # ══════════════════════════════════════════════════════
 
-def has_running_flow(flow_name: str, source_name: Optional[str] = None) -> bool:
+def has_running_flow(flow_name: str, source_name: Optional[str] = None, exclude_run_id: Optional[str] = None) -> bool:
     """Check if a flow already has a run with status='running'.
 
     When *source_name* is provided, the check is scoped to that source,
     allowing different sources to run the same flow in parallel.
+    When *exclude_run_id* is provided, that run is excluded from the check
+    (prevents self-deadlock when the API pre-creates the run).
     """
     query = (
         _orch_table("orchestration_runs")
@@ -808,6 +813,8 @@ def has_running_flow(flow_name: str, source_name: Optional[str] = None) -> bool:
     )
     if source_name:
         query = query.eq("source_name", source_name)
+    if exclude_run_id:
+        query = query.neq("id", str(exclude_run_id))
     result = query.limit(1).execute()
     return len(result.data or []) > 0
 
