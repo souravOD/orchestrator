@@ -470,6 +470,8 @@ def run_prebronze_to_bronze(
                 "OPENAI_MODEL_NAME": cfg.get("prebronze_model_name", os.environ.get("OPENAI_MODEL_NAME", "openai/gpt-5-mini")),
                 # Only override API key if explicitly provided; otherwise inherit from parent env
                 **({"OPENAI_API_KEY": cfg["prebronze_api_key"]} if cfg.get("prebronze_api_key") else {}),
+                # Intra-tool LLM parallelism (ThreadPoolExecutor workers)
+                "LLM_PARALLEL_WORKERS": str(cfg.get("llm_parallel_workers", 5)),
             },
             orch_run_id=orchestration_run_id,
         )
@@ -758,7 +760,11 @@ def run_bronze_to_silver(
             cli_args=cli_args,
             timeout=timeout,
             pipeline_name="bronze_to_silver",
-            env_overrides=_env_overrides_for_active_env(),
+            env_overrides={
+                **_env_overrides_for_active_env(),
+                # Intra-tool LLM parallelism (ThreadPoolExecutor workers)
+                "LLM_PARALLEL_WORKERS": str(cfg.get("llm_parallel_workers", 5)),
+            },
             orch_run_id=orchestration_run_id,
         )
 

@@ -11,10 +11,11 @@ const SOURCE_FLOWS = new Set([
     "multi_source_ingestion",
 ]);
 
-// Flows that support parallel workers
+// Flows that support parallel workers (intra-tool LLM parallelism)
 const PARALLEL_FLOWS = new Set([
     "full_ingestion",
     "multi_source_ingestion",
+    "single_layer",
 ]);
 
 // Available layers for single_layer flow
@@ -254,6 +255,8 @@ export default function ConsolePage() {
             if (PARALLEL_FLOWS.has(selectedFlow)) {
                 payload.max_concurrency = workers;
             }
+            // Intra-tool LLM parallelism — always send for flows using LLM tools
+            payload.llm_parallel_workers = workers;
 
             // Pipeline-specific opts
             if (skipTranslation) payload.skip_translation = true;

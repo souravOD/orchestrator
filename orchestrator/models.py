@@ -247,6 +247,12 @@ class TriggerRequest(BaseModel):
     reprocess_all: Optional[bool] = None
     # G2N
     neo4j_layer: Optional[str] = None
+    # ── Intra-tool LLM parallelism ────────────────────
+    llm_parallel_workers: Optional[int] = Field(
+        default=None,
+        ge=1, le=10,
+        description="Number of parallel LLM workers inside each tool (ThreadPoolExecutor)",
+    )
 
 
 class BatchSourceConfig(BaseModel):

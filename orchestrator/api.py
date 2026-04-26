@@ -249,6 +249,7 @@ async def trigger_flow(request: TriggerRequest):
         "enable_dq_generation": request.enable_dq_generation,
         "tables": request.tables,
         "reprocess_all": request.reprocess_all,
+        "llm_parallel_workers": request.llm_parallel_workers,
     }
     config.update({k: v for k, v in _pipeline_opts.items() if v is not None})
 

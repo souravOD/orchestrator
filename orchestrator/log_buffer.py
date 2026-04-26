@@ -36,7 +36,7 @@ class RunLogBuffer:
     _lock = threading.Lock()
 
     @classmethod
-    def register(cls, orch_run_id: str, max_lines: int = 10_000) -> None:
+    def register(cls, orch_run_id: str, max_lines: int = 100_000) -> None:
         """Create a new buffer for a run.  Safe to call multiple times."""
         with cls._lock:
             if orch_run_id not in cls._buffers:
