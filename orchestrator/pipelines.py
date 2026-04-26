@@ -65,17 +65,28 @@ def _check_cancellation(orchestration_run_id: str) -> None:
         raise FlowCancelledError(orchestration_run_id)
 
 
-def _stream_pipe(pipe, level: str, pipeline_name: str, accumulator: List[str]) -> None:
+def _stream_pipe(
+    pipe,
+    level: str,
+    pipeline_name: str,
+    accumulator: List[str],
+    orch_run_id: Optional[str] = None,
+) -> None:
     """
     Read lines from a subprocess pipe, log each one in real-time,
-    and accumulate for post-run parsing.
+    accumulate for post-run parsing, and push to RunLogBuffer for SSE.
     """
+    from .log_buffer import RunLogBuffer
+
+    stream_name = "stdout" if level == "info" else "stderr"
     log_fn = getattr(logger, level)
     for line in pipe:
         accumulator.append(line)
         stripped = line.rstrip("\n\r")
         if stripped:
             log_fn("[%s] %s", pipeline_name, stripped)
+            if orch_run_id:
+                RunLogBuffer.append(orch_run_id, stripped, stream_name)
     pipe.close()
 
 
@@ -107,6 +118,7 @@ def _run_pipeline_subprocess(
     timeout: int | None = None,
     pipeline_name: str = "unknown",
     env_overrides: Dict[str, str] | None = None,
+    orch_run_id: Optional[str] = None,
 ) -> subprocess.CompletedProcess:
     """
     Run a pipeline module as a subprocess via ``python -m <module>``.
@@ -200,12 +212,12 @@ def _run_pipeline_subprocess(
 
     t_out = Thread(
         target=_stream_pipe,
-        args=(proc.stdout, "info", pipeline_name, stdout_lines),
+        args=(proc.stdout, "info", pipeline_name, stdout_lines, orch_run_id),
         daemon=True,
     )
     t_err = Thread(
         target=_stream_pipe,
-        args=(proc.stderr, "warning", f"{pipeline_name}:stderr", stderr_lines),
+        args=(proc.stderr, "warning", f"{pipeline_name}:stderr", stderr_lines, orch_run_id),
         daemon=True,
     )
     t_out.start()
@@ -455,10 +467,11 @@ def run_prebronze_to_bronze(
             pipeline_name="prebronze_to_bronze",
             env_overrides={
                 **_env_overrides_for_active_env(),
-                "OPENAI_MODEL_NAME": cfg.get("prebronze_model_name", os.environ.get("OPENAI_MODEL_NAME", "openai/gpt-4o-mini")),
+                "OPENAI_MODEL_NAME": cfg.get("prebronze_model_name", os.environ.get("OPENAI_MODEL_NAME", "openai/gpt-5-mini")),
                 # Only override API key if explicitly provided; otherwise inherit from parent env
                 **({"OPENAI_API_KEY": cfg["prebronze_api_key"]} if cfg.get("prebronze_api_key") else {}),
             },
+            orch_run_id=orchestration_run_id,
         )
 
         # 5. Parse result from stdout (best-effort)
@@ -609,7 +622,7 @@ def run_usda_nutrition_fetch(
 
         # 3. Run USDA Fetcher as subprocess
         timeout = cfg.get("usda_timeout", 3600)  # Default 1 hour — USDA API is slow
-        usda_model = cfg.get("usda_model_name", os.environ.get("OPENAI_MODEL_NAME", "openai/gpt-4o-mini"))
+        usda_model = cfg.get("usda_model_name", os.environ.get("OPENAI_MODEL_NAME", "openai/gpt-5-mini"))
         logger.info(
             "🔬 Starting USDA Nutrition Fetch (limit=%s, workers=%s, timeout=%s, model=%s)",
             limit, max_workers, timeout, usda_model,
@@ -625,6 +638,7 @@ def run_usda_nutrition_fetch(
                 # Only override API key if explicitly provided; otherwise inherit from parent env
                 **({"OPENAI_API_KEY": cfg["usda_api_key"]} if cfg.get("usda_api_key") else {}),
             },
+            orch_run_id=orchestration_run_id,
         )
 
         # 4. Parse result from stdout
@@ -745,6 +759,7 @@ def run_bronze_to_silver(
             timeout=timeout,
             pipeline_name="bronze_to_silver",
             env_overrides=_env_overrides_for_active_env(),
+            orch_run_id=orchestration_run_id,
         )
 
         # Parse structured result from stdout (best-effort)
@@ -858,6 +873,7 @@ def run_silver_to_gold(
             timeout=timeout,
             pipeline_name="silver_to_gold",
             env_overrides=_env_overrides_for_active_env(),
+            orch_run_id=orchestration_run_id,
         )
 
         # Parse structured result from stdout (best-effort)

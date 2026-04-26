@@ -238,6 +238,20 @@ async def trigger_flow(request: TriggerRequest):
         "dry_run": request.dry_run,
     }
 
+    # Merge pipeline-specific options (only if explicitly set)
+    _pipeline_opts = {
+        "skip_translation": request.skip_translation,
+        "source_record_id_field": request.source_record_id_field,
+        "target_table": request.target_table,
+        "usda_limit": request.usda_limit,
+        "usda_max_workers": request.usda_max_workers,
+        "enable_schema_diff": request.enable_schema_diff,
+        "enable_dq_generation": request.enable_dq_generation,
+        "tables": request.tables,
+        "reprocess_all": request.reprocess_all,
+    }
+    config.update({k: v for k, v in _pipeline_opts.items() if v is not None})
+
     source_name = request.source_name or "api"
 
     try:
@@ -279,8 +293,19 @@ async def trigger_flow(request: TriggerRequest):
             if request.storage_bucket and request.storage_path:
                 kwargs["storage_bucket"] = request.storage_bucket
                 kwargs["storage_path"] = request.storage_path
-            else:
+            elif request.input_path:
                 kwargs["input_path"] = request.input_path
+            else:
+                # Console sends only source_name — resolve storage from data_sources table
+                src = db.get_data_source_by_name(source_name)
+                if src and src.get("storage_bucket") and src.get("storage_path"):
+                    kwargs["storage_bucket"] = src["storage_bucket"]
+                    kwargs["storage_path"] = src["storage_path"]
+                else:
+                    logger.warning(
+                        "No storage_path found for source_name=%s — flow may fail",
+                        source_name,
+                    )
 
         elif request.flow_name == "single_layer":
             kwargs["layer"] = request.layers[0] if request.layers else "bronze_to_silver"
@@ -305,6 +330,7 @@ async def trigger_flow(request: TriggerRequest):
                         status="failed",
                         total_errors=1,
                         completed_at=db._utcnow(),
+                        error_message=str(exc),
                     )
                 except Exception as update_exc:
                     logger.warning("Failed to mark trigger run %s as failed: %s", orch_run_id, update_exc)
@@ -935,6 +961,7 @@ async def trigger_data_source_ingest(
                     status="failed",
                     total_errors=1,
                     completed_at=db._utcnow(),
+                    error_message=str(exc),
                 )
             except Exception as update_exc:
                 logger.warning("Failed to mark ingest run %s as failed: %s", run_id, update_exc)
@@ -1088,17 +1115,31 @@ async def stream_run_logs(run_id: str, environment: Optional[str] = None):
         raise HTTPException(status_code=404, detail="Run not found")
 
     async def event_generator():
+        from .log_buffer import RunLogBuffer
+
         # Ensure correct env is set for the streaming context
         if environment:
             db.set_env(environment)
         last_seen_count = 0
+        raw_cursor = 0
         terminal_statuses = {
             "completed", "failed", "cancelled",
             "timed_out", "partially_completed",
         }
 
         while True:
-            # Collect all step logs across pipeline runs
+            # ── 1. Send raw subprocess output lines (real-time) ──
+            raw_lines = RunLogBuffer.get_since(run_id, raw_cursor)
+            for rl in raw_lines:
+                data = json.dumps({
+                    "type": "raw",
+                    "message": rl["message"],
+                    "stream": rl.get("stream", "stdout"),
+                })
+                yield f"data: {data}\n\n"
+            raw_cursor += len(raw_lines)
+
+            # ── 2. Send structured step logs (existing behavior) ──
             pipeline_runs = db.list_pipeline_runs(orchestration_run_id=run_id)
             all_steps = []
             for pr in pipeline_runs:
@@ -1133,7 +1174,7 @@ async def stream_run_logs(run_id: str, environment: Optional[str] = None):
                 yield f"data: {data}\n\n"
             last_seen_count = len(all_steps)
 
-            # Check if run reached terminal status
+            # ── 3. Check if run reached terminal status ──
             current_run = db.get_orchestration_run(run_id)
             if current_run and current_run.get("status") in terminal_statuses:
                 final_data = json.dumps({
@@ -1145,7 +1186,7 @@ async def stream_run_logs(run_id: str, environment: Optional[str] = None):
                 yield f"data: {final_data}\n\n"
                 break
 
-            await asyncio.sleep(2)
+            await asyncio.sleep(1)  # Reduced from 2s for better real-time feel
 
     return StreamingResponse(
         event_generator(),
@@ -1156,6 +1197,90 @@ async def stream_run_logs(run_id: str, environment: Optional[str] = None):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+# ══════════════════════════════════════════════════════
+# Bucket Logs Endpoints (Historical Log Retrieval)
+# ══════════════════════════════════════════════════════
+
+@app.get("/api/runs/{run_id}/bucket-logs")
+async def list_bucket_logs(
+    run_id: str,
+    environment: Optional[str] = None,
+):
+    """List available log files stored in Supabase bucket for a completed run."""
+    try:
+        if environment:
+            db.set_env(environment)
+
+        bucket_name = "orchestration-logs"
+        if (environment or db.get_env()) == "testing":
+            bucket_name = "testing-orchestration-logs"
+
+        client = db.get_storage_client()
+        prefix = f"runs/{run_id}"
+
+        files = client.storage.from_(bucket_name).list(prefix)
+        file_list = []
+        for f in (files or []):
+            if isinstance(f, dict):
+                file_list.append({
+                    "name": f.get("name", ""),
+                    "size": f.get("metadata", {}).get("size", 0) if isinstance(f.get("metadata"), dict) else 0,
+                    "created_at": f.get("created_at", ""),
+                })
+            elif isinstance(f, str):
+                file_list.append({"name": f, "size": 0, "created_at": ""})
+
+        if environment:
+            db.set_env("production")
+
+        return {"run_id": run_id, "bucket": bucket_name, "files": file_list}
+
+    except Exception as exc:
+        if environment:
+            db.set_env("production")
+        logger.warning("Failed to list bucket logs for %s: %s", run_id, exc)
+        return {"run_id": run_id, "bucket": "", "files": [], "error": str(exc)}
+
+
+@app.get("/api/runs/{run_id}/bucket-logs/{filename}")
+async def get_bucket_log_file(
+    run_id: str,
+    filename: str,
+    environment: Optional[str] = None,
+):
+    """Download a specific log file from Supabase bucket."""
+    try:
+        if environment:
+            db.set_env(environment)
+
+        bucket_name = "orchestration-logs"
+        if (environment or db.get_env()) == "testing":
+            bucket_name = "testing-orchestration-logs"
+
+        client = db.get_storage_client()
+        file_path = f"runs/{run_id}/{filename}"
+
+        content = client.storage.from_(bucket_name).download(file_path)
+        if isinstance(content, bytes):
+            content = content.decode("utf-8")
+
+        if environment:
+            db.set_env("production")
+
+        # Try to parse as JSON for structured display
+        try:
+            parsed = json.loads(content)
+            return {"run_id": run_id, "filename": filename, "content": parsed, "format": "json"}
+        except (json.JSONDecodeError, TypeError):
+            return {"run_id": run_id, "filename": filename, "content": content, "format": "text"}
+
+    except Exception as exc:
+        if environment:
+            db.set_env("production")
+        logger.warning("Failed to fetch bucket log %s/%s: %s", run_id, filename, exc)
+        raise HTTPException(status_code=404, detail=f"Log file not found: {filename}")
 
 
 # ══════════════════════════════════════════════════════
@@ -1202,3 +1327,4 @@ def _run_flow_endpoint(flow_fn, flow_kwargs: dict, endpoint_name: str):
     except Exception as exc:
         logger.error("%s trigger failed: %s", endpoint_name, exc)
         raise HTTPException(status_code=500, detail=str(exc))
+

@@ -81,10 +81,39 @@ def _upload_json(path: str, data: Any) -> bool:
         return False
 
 
+def _upload_jsonl(path: str, lines: list) -> bool:
+    """Upload a list of dicts as newline-delimited JSON (JSONL).
+
+    Returns True on success, False on failure (never raises).
+    """
+    try:
+        client = db.get_storage_client()
+        bucket = _get_log_bucket()
+        content = "\n".join(
+            json.dumps(line, default=str, ensure_ascii=False) for line in lines
+        ).encode("utf-8")
+
+        client.storage.from_(bucket).upload(
+            path,
+            content,
+            file_options={
+                "content-type": "application/x-ndjson",
+                "upsert": "true",
+            },
+        )
+        logger.debug("📦 Uploaded JSONL to %s/%s (%d lines, %d bytes)",
+                     bucket, path, len(lines), len(content))
+        return True
+    except Exception as exc:
+        logger.warning("⚠️ JSONL persist failed for %s: %s", path, exc)
+        return False
+
+
 def persist_run_logs(
     orchestration_run_id: str,
     *,
     extra_metadata: Optional[Dict[str, Any]] = None,
+    console_lines: Optional[List[Dict[str, Any]]] = None,
 ) -> bool:
     """Persist complete log bundle for an orchestration run.
 
@@ -92,6 +121,7 @@ def persist_run_logs(
     - orchestration_runs row (summary)
     - pipeline_runs linked to this orchestration run
     - pipeline_step_logs for each pipeline run
+    - console output lines (real-time subprocess stdout/stderr)
 
     All uploaded to: orchestration-logs/runs/{run_id}/
 
@@ -101,6 +131,8 @@ def persist_run_logs(
         The UUID of the orchestration run to persist.
     extra_metadata : dict, optional
         Additional metadata to embed in summary.json (e.g. trigger info).
+    console_lines : list of dict, optional
+        Raw subprocess output lines captured from RunLogBuffer.drain().
 
     Returns
     -------
@@ -163,10 +195,16 @@ def persist_run_logs(
         if not _upload_json(f"{prefix}/step_logs.json", all_steps):
             all_ok = False
 
+        # ── 4. Console output (real-time subprocess logs) ──
+        if console_lines:
+            if not _upload_jsonl(f"{prefix}/console_output.jsonl", console_lines):
+                all_ok = False
+
         if all_ok:
+            n_console = len(console_lines) if console_lines else 0
             logger.info(
-                "✅ Logs persisted: %s (%d pipeline runs, %d steps)",
-                orchestration_run_id, len(pipeline_runs), len(all_steps),
+                "✅ Logs persisted: %s (%d pipeline runs, %d steps, %d console lines)",
+                orchestration_run_id, len(pipeline_runs), len(all_steps), n_console,
             )
         else:
             logger.warning(

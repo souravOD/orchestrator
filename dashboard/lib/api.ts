@@ -186,10 +186,14 @@ export const api = {
 
     // ── Cancel / Retry ─────────────────────────────────
 
-    cancelRun: (id: string) =>
-        fetchApi<{ cancelled: boolean; run_id: string }>(`/api/runs/${id}/cancel`, {
-            method: "POST",
-        }),
+    cancelRun: (id: string, environment?: string) => {
+        const params = new URLSearchParams();
+        if (environment) params.set("environment", environment);
+        return fetchApi<{ cancelled: boolean; run_id: string }>(
+            `/api/runs/${id}/cancel?${params}`,
+            { method: "POST" }
+        );
+    },
 
     retryRun: (id: string) =>
         fetchApi<{ status: string; result: unknown }>(`/api/runs/${id}/retry`, {
@@ -296,6 +300,34 @@ export const api = {
             `/api/event-triggers/${id}`,
             { method: "PATCH", body: JSON.stringify(fields) }
         ),
+
+
+
+    getBucketLogs: (runId: string, environment?: string) => {
+        const params = new URLSearchParams();
+        if (environment) params.set("environment", environment);
+        return fetchApi<BucketLogsResponse>(
+            `/api/runs/${runId}/bucket-logs?${params}`
+        );
+    },
+
+    getBucketLogFile: (runId: string, filename: string, environment?: string) => {
+        const params = new URLSearchParams();
+        if (environment) params.set("environment", environment);
+        return fetchApi<BucketLogFileResponse>(
+            `/api/runs/${runId}/bucket-logs/${filename}?${params}`
+        );
+    },
+
+    // ── Enriched Runs (for history) ────────────────────
+
+    getRecentRuns: (limit = 10, environment?: string) => {
+        const params = new URLSearchParams({ limit: String(limit) });
+        if (environment) params.set("environment", environment);
+        return fetchApi<{ runs: OrchestrationRun[]; count: number }>(
+            `/api/runs?${params}`
+        );
+    },
 };
 
 // ── New Types ──────────────────────────────────────────
@@ -372,4 +404,24 @@ export interface EventTrigger {
     description: string | null;
     created_at: string;
     updated_at: string;
+}
+
+export interface BucketLogFile {
+    name: string;
+    size: number;
+    created_at: string;
+}
+
+export interface BucketLogsResponse {
+    run_id: string;
+    bucket: string;
+    files: BucketLogFile[];
+    error?: string;
+}
+
+export interface BucketLogFileResponse {
+    run_id: string;
+    filename: string;
+    content: unknown;
+    format: "json" | "text";
 }

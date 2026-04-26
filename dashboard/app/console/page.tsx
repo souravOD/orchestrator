@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { api, FlowDefinition, SourceNameItem, TestStatus } from "@/lib/api";
+import { api, FlowDefinition, SourceNameItem, TestStatus, OrchestrationRun } from "@/lib/api";
 import Terminal from "@/components/Terminal";
 
 // Flows that support source_name parameter
@@ -26,10 +26,28 @@ const LAYERS = [
     { value: "usda_nutrition_fetch", label: "USDA Nutrition Fetch" },
 ];
 
+// Neo4j sub-layers
+const NEO4J_LAYERS = [
+    { value: "all", label: "All Layers" },
+    { value: "recipes", label: "Recipes" },
+    { value: "ingredients", label: "Ingredients" },
+    { value: "products", label: "Products" },
+    { value: "customers", label: "Customers" },
+];
+
+// Which pipelines use batch_size, incremental, dry_run
+const BATCH_SIZE_LAYERS = new Set(["bronze_to_silver", "silver_to_gold"]);
+const INCREMENTAL_LAYERS = new Set(["bronze_to_silver", "silver_to_gold"]);
+const DRY_RUN_LAYERS = new Set(["bronze_to_silver", "silver_to_gold"]);
+
 interface HistoryItem {
     command: string;
     flow: string;
     timestamp: string;
+    run_id?: string;
+    environment?: string;
+    status?: string;
+    duration_seconds?: number;
 }
 
 function buildCommand(
@@ -41,6 +59,14 @@ function buildCommand(
         dryRun: boolean;
         workers: number;
         layer: string;
+        skipTranslation: boolean;
+        usdaLimit: number | null;
+        usdaMaxWorkers: number;
+        enableSchemaDiff: boolean;
+        enableDqGeneration: boolean;
+        tables: string;
+        reprocessAll: boolean;
+        neo4jLayer: string;
     }
 ): string {
     const parts = ["orchestrator run", `--flow ${flow}`];
@@ -50,12 +76,24 @@ function buildCommand(
     if (flow === "single_layer" && opts.layer) {
         parts.push(`--layer ${opts.layer}`);
     }
-    parts.push(`--batch-size ${opts.batchSize}`);
+
+    // Only show generic opts for layers that support them
+    const isGenericLayer = flow !== "single_layer" || BATCH_SIZE_LAYERS.has(opts.layer);
+    if (isGenericLayer) {
+        parts.push(`--batch-size ${opts.batchSize}`);
+    }
     if (PARALLEL_FLOWS.has(flow)) {
         parts.push(`--workers ${opts.workers}`);
     }
-    if (!opts.incremental) parts.push("--full");
-    if (opts.dryRun) parts.push("--dry-run");
+    if (isGenericLayer && !opts.incremental) parts.push("--full");
+    if (isGenericLayer && opts.dryRun) parts.push("--dry-run");
+
+    // Pipeline-specific
+    if (opts.skipTranslation) parts.push("--skip-translation");
+    if (opts.usdaLimit) parts.push(`--usda-limit ${opts.usdaLimit}`);
+    if (opts.tables) parts.push(`--tables ${opts.tables}`);
+    if (opts.reprocessAll) parts.push("--reprocess-all");
+
     return parts.join(" ");
 }
 
@@ -63,7 +101,7 @@ export default function ConsolePage() {
     const [flows, setFlows] = useState<FlowDefinition[]>([]);
     const [loading, setLoading] = useState(true);
 
-    // Form state
+    // Form state — generic
     const [selectedFlow, setSelectedFlow] = useState("full_ingestion");
     const [sourceName, setSourceName] = useState("");
     const [batchSize, setBatchSize] = useState(100);
@@ -71,6 +109,17 @@ export default function ConsolePage() {
     const [dryRun, setDryRun] = useState(false);
     const [workers, setWorkers] = useState(5);
     const [layer, setLayer] = useState("prebronze_to_bronze");
+
+    // Form state — pipeline-specific
+    const [skipTranslation, setSkipTranslation] = useState(false);
+    const [usdaLimit, setUsdaLimit] = useState<number | null>(null);
+    const [usdaMaxWorkers, setUsdaMaxWorkers] = useState(5);
+    const [enableSchemaDiff, setEnableSchemaDiff] = useState(false);
+    const [enableDqGeneration, setEnableDqGeneration] = useState(false);
+    const [tables, setTables] = useState("");
+    const [reprocessAll, setReprocessAll] = useState(false);
+    const [neo4jLayer, setNeo4jLayer] = useState("all");
+    const [showAdvanced, setShowAdvanced] = useState(false);
 
     // Source names from API
     const [sourceNames, setSourceNames] = useState<SourceNameItem[]>([]);
@@ -85,6 +134,7 @@ export default function ConsolePage() {
     const [activeCommand, setActiveCommand] = useState("$ waiting...");
     const [error, setError] = useState<string | null>(null);
     const [history, setHistory] = useState<HistoryItem[]>([]);
+    const [historicalMode, setHistoricalMode] = useState(false);
 
     // Load flows and test status (once on mount)
     useEffect(() => {
@@ -111,6 +161,33 @@ export default function ConsolePage() {
         } catch { /* ignore */ }
     }, []);
 
+    // Enrich history with DB data on mount
+    useEffect(() => {
+        async function enrichHistory() {
+            if (history.length === 0) return;
+            try {
+                const res = await api.getRecentRuns(10);
+                if (res.runs && res.runs.length > 0) {
+                    setHistory((prev) =>
+                        prev.map((item) => {
+                            if (!item.run_id) return item;
+                            const match = res.runs.find((r: OrchestrationRun) => r.id === item.run_id);
+                            if (match) {
+                                return {
+                                    ...item,
+                                    status: match.status,
+                                    duration_seconds: match.duration_seconds ?? undefined,
+                                };
+                            }
+                            return item;
+                        })
+                    );
+                }
+            } catch { /* best-effort */ }
+        }
+        enrichHistory();
+    }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
     // Re-fetch source names when environment toggles
     useEffect(() => {
         let isCurrent = true;
@@ -134,17 +211,25 @@ export default function ConsolePage() {
 
     const currentFlowDesc = flows.find((f) => f.name === selectedFlow)?.description || "";
 
+    // Determine which pipeline-specific options to show
+    const activeLayer = selectedFlow === "single_layer" ? layer : null;
+    const showP2BOptions = selectedFlow === "full_ingestion" || activeLayer === "prebronze_to_bronze";
+    const showUSDAOptions = selectedFlow === "full_ingestion" || activeLayer === "usda_nutrition_fetch";
+    const showB2SOptions = selectedFlow === "full_ingestion" || selectedFlow === "bronze_to_gold" || activeLayer === "bronze_to_silver";
+    const showS2GOptions = selectedFlow === "full_ingestion" || selectedFlow === "bronze_to_gold" || activeLayer === "silver_to_gold";
+    const showG2NOptions = activeLayer === "gold_to_neo4j";
+    const showGenericParams = selectedFlow !== "single_layer" || BATCH_SIZE_LAYERS.has(layer);
+    const hasAdvancedOptions = showP2BOptions || showUSDAOptions || showB2SOptions || showS2GOptions || showG2NOptions;
+
     const handleExecute = useCallback(async () => {
         setError(null);
         setExecuting(true);
+        setHistoricalMode(false);
 
         const cmd = buildCommand(selectedFlow, {
-            sourceName,
-            batchSize,
-            incremental,
-            dryRun,
-            workers,
-            layer,
+            sourceName, batchSize, incremental, dryRun, workers, layer,
+            skipTranslation, usdaLimit, usdaMaxWorkers, enableSchemaDiff,
+            enableDqGeneration, tables, reprocessAll, neo4jLayer,
         });
 
         setActiveCommand(cmd);
@@ -170,16 +255,27 @@ export default function ConsolePage() {
                 payload.max_concurrency = workers;
             }
 
+            // Pipeline-specific opts
+            if (skipTranslation) payload.skip_translation = true;
+            if (usdaLimit) payload.usda_limit = usdaLimit;
+            if (usdaMaxWorkers !== 5) payload.usda_max_workers = usdaMaxWorkers;
+            if (enableSchemaDiff) payload.enable_schema_diff = true;
+            if (enableDqGeneration) payload.enable_dq_generation = true;
+            if (tables) payload.tables = tables;
+            if (reprocessAll) payload.reprocess_all = true;
+
             const result = await api.triggerFlow(payload);
 
             if (result.run_id) {
                 setActiveRunId(result.run_id);
 
-                // Save to history
+                // Save to history with run_id
                 const item: HistoryItem = {
                     command: cmd,
                     flow: selectedFlow,
                     timestamp: new Date().toISOString(),
+                    run_id: result.run_id,
+                    environment,
                 };
                 const newHistory = [item, ...history].slice(0, 10);
                 setHistory(newHistory);
@@ -194,16 +290,72 @@ export default function ConsolePage() {
             setError(err instanceof Error ? err.message : String(err));
             setExecuting(false);
         }
-    }, [selectedFlow, sourceName, batchSize, incremental, dryRun, workers, layer, history, environment]);
+    }, [selectedFlow, sourceName, batchSize, incremental, dryRun, workers, layer,
+        history, environment, skipTranslation, usdaLimit, usdaMaxWorkers,
+        enableSchemaDiff, enableDqGeneration, tables, reprocessAll, neo4jLayer]);
 
     const handleComplete = useCallback((status: string) => {
         setExecuting(false);
-        console.log("Run completed:", status);
+        // Update history with completed status
+        setHistory((prev) => {
+            const updated = prev.map((item, i) =>
+                i === 0 ? { ...item, status } : item
+            );
+            try {
+                localStorage.setItem("console-history", JSON.stringify(updated));
+            } catch { /* ignore */ }
+            return updated;
+        });
     }, []);
 
     const handleHistoryClick = useCallback((item: HistoryItem) => {
-        setSelectedFlow(item.flow);
+        if (item.run_id) {
+            // Load logs for this historical run
+            setActiveRunId(item.run_id);
+            setActiveCommand(item.command);
+            setHistoricalMode(true);
+            if (item.environment) {
+                setEnvironment(item.environment as "production" | "testing");
+            }
+        } else {
+            // Fallback: just set the flow
+            setSelectedFlow(item.flow);
+        }
     }, []);
+
+    // ── Render helpers for toggle/input ──────────────────
+
+    const renderToggle = (label: string, value: boolean, onChange: (v: boolean) => void, id: string) => (
+        <div className="form-toggle-group">
+            <span className="form-toggle-label">{label}</span>
+            <button
+                id={id}
+                className={`toggle ${value ? "active" : ""}`}
+                onClick={() => onChange(!value)}
+                disabled={executing}
+            />
+        </div>
+    );
+
+    const statusBadge = (status?: string) => {
+        if (!status) return null;
+        const colors: Record<string, string> = {
+            completed: "var(--accent-green)",
+            failed: "var(--accent-red)",
+            running: "var(--accent-blue, #3b82f6)",
+            cancelled: "var(--text-muted)",
+        };
+        return (
+            <span style={{
+                display: "inline-block",
+                width: 6,
+                height: 6,
+                borderRadius: "50%",
+                background: colors[status] || "var(--text-muted)",
+                marginRight: 6,
+            }} />
+        );
+    };
 
     return (
         <div>
@@ -366,22 +518,30 @@ export default function ConsolePage() {
                         )}
                     </div>
 
+                    {/* ── Generic Parameters ── */}
                     <div className="config-section">
                         <div className="config-section-title">Parameters</div>
 
-                        <div className="form-group">
-                            <label className="form-label">Batch Size</label>
-                            <input
-                                id="batch-size"
-                                type="number"
-                                className="form-input"
-                                min={1}
-                                max={10000}
-                                value={batchSize}
-                                onChange={(e) => setBatchSize(Number(e.target.value))}
-                                disabled={executing}
-                            />
-                        </div>
+                        {showGenericParams && (
+                            <div className="form-group">
+                                <label className="form-label">
+                                    Batch Size
+                                    <span style={{ fontSize: 10, color: "var(--text-muted)", marginLeft: 4 }}>
+                                        (records per table per run)
+                                    </span>
+                                </label>
+                                <input
+                                    id="batch-size"
+                                    type="number"
+                                    className="form-input"
+                                    min={1}
+                                    max={10000}
+                                    value={batchSize}
+                                    onChange={(e) => setBatchSize(Number(e.target.value))}
+                                    disabled={executing}
+                                />
+                            </div>
+                        )}
 
                         {PARALLEL_FLOWS.has(selectedFlow) && (
                             <div className="form-group" style={{ marginTop: 12 }}>
@@ -408,24 +568,144 @@ export default function ConsolePage() {
                             </div>
                         )}
 
-                        <div className="form-toggle-group" style={{ marginTop: 8 }}>
-                            <span className="form-toggle-label">Incremental</span>
-                            <button
-                                className={`toggle ${incremental ? "active" : ""}`}
-                                onClick={() => setIncremental(!incremental)}
-                                disabled={executing}
-                            />
-                        </div>
-
-                        <div className="form-toggle-group">
-                            <span className="form-toggle-label">Dry Run</span>
-                            <button
-                                className={`toggle ${dryRun ? "active" : ""}`}
-                                onClick={() => setDryRun(!dryRun)}
-                                disabled={executing}
-                            />
-                        </div>
+                        {(showGenericParams && INCREMENTAL_LAYERS.has(activeLayer || "")) || selectedFlow !== "single_layer" ? (
+                            <>
+                                {renderToggle("Incremental", incremental, setIncremental, "toggle-incremental")}
+                                {renderToggle("Dry Run", dryRun, setDryRun, "toggle-dry-run")}
+                            </>
+                        ) : null}
                     </div>
+
+                    {/* ── Pipeline-Specific Options ── */}
+                    {hasAdvancedOptions && (
+                        <div className="config-section">
+                            <button
+                                onClick={() => setShowAdvanced(!showAdvanced)}
+                                style={{
+                                    width: "100%",
+                                    display: "flex",
+                                    alignItems: "center",
+                                    justifyContent: "space-between",
+                                    background: "none",
+                                    border: "none",
+                                    cursor: "pointer",
+                                    color: "var(--text-primary)",
+                                    padding: 0,
+                                    fontSize: 12,
+                                    fontWeight: 600,
+                                    letterSpacing: "0.04em",
+                                    textTransform: "uppercase" as const,
+                                }}
+                            >
+                                <span>{showAdvanced ? "▾" : "▸"} Pipeline Options</span>
+                                <span style={{ fontSize: 10, color: "var(--text-muted)", fontWeight: 400, textTransform: "none" as const }}>
+                                    {[showP2BOptions && "P2B", showUSDAOptions && "USDA",
+                                      showB2SOptions && "B2S", showS2GOptions && "S2G",
+                                      showG2NOptions && "G2N"].filter(Boolean).join(" · ")}
+                                </span>
+                            </button>
+
+                            {showAdvanced && (
+                                <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 12 }}>
+                                    {/* P2B Options */}
+                                    {showP2BOptions && (
+                                        <div style={{ padding: "8px 10px", background: "rgba(255,255,255,0.02)", borderRadius: 6, border: "1px solid var(--border)" }}>
+                                            <div style={{ fontSize: 10, fontWeight: 600, color: "var(--text-muted)", marginBottom: 6, textTransform: "uppercase" as const, letterSpacing: "0.05em" }}>P2B — PreBronze → Bronze</div>
+                                            {renderToggle("Skip Translation", skipTranslation, setSkipTranslation, "toggle-skip-translation")}
+                                        </div>
+                                    )}
+
+                                    {/* USDA Options */}
+                                    {showUSDAOptions && (
+                                        <div style={{ padding: "8px 10px", background: "rgba(255,255,255,0.02)", borderRadius: 6, border: "1px solid var(--border)" }}>
+                                            <div style={{ fontSize: 10, fontWeight: 600, color: "var(--text-muted)", marginBottom: 6, textTransform: "uppercase" as const, letterSpacing: "0.05em" }}>USDA — Nutrition Fetch</div>
+                                            <div className="form-group" style={{ marginBottom: 6 }}>
+                                                <label className="form-label" style={{ fontSize: 11 }}>Record Limit (0 = unlimited)</label>
+                                                <input
+                                                    type="number"
+                                                    className="form-input"
+                                                    min={0}
+                                                    value={usdaLimit || 0}
+                                                    onChange={(e) => setUsdaLimit(Number(e.target.value) || null)}
+                                                    disabled={executing}
+                                                    style={{ fontSize: 12 }}
+                                                />
+                                            </div>
+                                            <div className="form-group">
+                                                <label className="form-label" style={{ fontSize: 11 }}>Max Workers: {usdaMaxWorkers}</label>
+                                                <input
+                                                    type="range"
+                                                    className="form-range"
+                                                    min={1}
+                                                    max={10}
+                                                    value={usdaMaxWorkers}
+                                                    onChange={(e) => setUsdaMaxWorkers(Number(e.target.value))}
+                                                    disabled={executing}
+                                                />
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* B2S Options */}
+                                    {showB2SOptions && (
+                                        <div style={{ padding: "8px 10px", background: "rgba(255,255,255,0.02)", borderRadius: 6, border: "1px solid var(--border)" }}>
+                                            <div style={{ fontSize: 10, fontWeight: 600, color: "var(--text-muted)", marginBottom: 6, textTransform: "uppercase" as const, letterSpacing: "0.05em" }}>B2S — Bronze → Silver</div>
+                                            {renderToggle("Enable Schema Diff", enableSchemaDiff, setEnableSchemaDiff, "toggle-schema-diff")}
+                                            {renderToggle("Enable DQ Generation", enableDqGeneration, setEnableDqGeneration, "toggle-dq-gen")}
+                                        </div>
+                                    )}
+
+                                    {/* S2G Options */}
+                                    {showS2GOptions && (
+                                        <div style={{ padding: "8px 10px", background: "rgba(255,255,255,0.02)", borderRadius: 6, border: "1px solid var(--border)" }}>
+                                            <div style={{ fontSize: 10, fontWeight: 600, color: "var(--text-muted)", marginBottom: 6, textTransform: "uppercase" as const, letterSpacing: "0.05em" }}>S2G — Silver → Gold</div>
+                                            {renderToggle("Reprocess All", reprocessAll, setReprocessAll, "toggle-reprocess-all")}
+                                        </div>
+                                    )}
+
+                                    {/* Tables filter — shared across B2S/S2G */}
+                                    {(showB2SOptions || showS2GOptions) && (
+                                        <div className="form-group">
+                                            <label className="form-label" style={{ fontSize: 11 }}>
+                                                Tables Filter
+                                                <span style={{ fontSize: 10, color: "var(--text-muted)", marginLeft: 4 }}>(comma-separated)</span>
+                                            </label>
+                                            <input
+                                                type="text"
+                                                className="form-input"
+                                                placeholder="e.g. recipes,ingredients"
+                                                value={tables}
+                                                onChange={(e) => setTables(e.target.value)}
+                                                disabled={executing}
+                                                style={{ fontSize: 12 }}
+                                            />
+                                        </div>
+                                    )}
+
+                                    {/* G2N Options */}
+                                    {showG2NOptions && (
+                                        <div style={{ padding: "8px 10px", background: "rgba(255,255,255,0.02)", borderRadius: 6, border: "1px solid var(--border)" }}>
+                                            <div style={{ fontSize: 10, fontWeight: 600, color: "var(--text-muted)", marginBottom: 6, textTransform: "uppercase" as const, letterSpacing: "0.05em" }}>G2N — Gold → Neo4j</div>
+                                            <div className="form-group">
+                                                <label className="form-label" style={{ fontSize: 11 }}>Sync Layer</label>
+                                                <select
+                                                    className="form-select"
+                                                    value={neo4jLayer}
+                                                    onChange={(e) => setNeo4jLayer(e.target.value)}
+                                                    disabled={executing}
+                                                    style={{ fontSize: 12 }}
+                                                >
+                                                    {NEO4J_LAYERS.map((l) => (
+                                                        <option key={l.value} value={l.value}>{l.label}</option>
+                                                    ))}
+                                                </select>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    )}
 
                     <button
                         id="execute-btn"
@@ -445,6 +725,7 @@ export default function ConsolePage() {
                         )}
                     </button>
 
+                    {/* ── Recent Commands History ── */}
                     {history.length > 0 && (
                         <div className="config-section">
                             <div className="config-section-title">Recent Commands</div>
@@ -454,9 +735,27 @@ export default function ConsolePage() {
                                         key={i}
                                         className="command-history-item"
                                         onClick={() => handleHistoryClick(item)}
+                                        style={{ cursor: "pointer" }}
                                     >
-                                        <span style={{ opacity: 0.5 }}>$</span>
-                                        <span>{item.command}</span>
+                                        <div style={{ display: "flex", alignItems: "center", gap: 6, overflow: "hidden" }}>
+                                            {statusBadge(item.status)}
+                                            <span style={{ opacity: 0.5 }}>$</span>
+                                            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                                {item.command}
+                                            </span>
+                                        </div>
+                                        <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10, color: "var(--text-muted)", marginTop: 2 }}>
+                                            <span>{new Date(item.timestamp).toLocaleTimeString()}</span>
+                                            {item.duration_seconds != null && (
+                                                <span>· {item.duration_seconds.toFixed(1)}s</span>
+                                            )}
+                                            {item.environment === "testing" && (
+                                                <span style={{ color: "rgb(245, 158, 11)" }}>🧪</span>
+                                            )}
+                                            {item.run_id && (
+                                                <span style={{ color: "var(--accent-blue, #3b82f6)" }}>📂</span>
+                                            )}
+                                        </div>
                                     </div>
                                 ))}
                             </div>
@@ -468,7 +767,9 @@ export default function ConsolePage() {
                 <Terminal
                     runId={activeRunId}
                     command={activeCommand}
+                    environment={environment}
                     onComplete={handleComplete}
+                    historicalMode={historicalMode}
                 />
             </div>
         </div>

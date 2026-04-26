@@ -231,6 +231,23 @@ class TriggerRequest(BaseModel):
     dry_run: bool = False
     environment: Literal["production", "testing"] = "production"
 
+    # ── Pipeline-specific options ──────────────────────
+    # P2B
+    skip_translation: Optional[bool] = None
+    source_record_id_field: Optional[str] = None
+    target_table: Optional[str] = None
+    # USDA
+    usda_limit: Optional[int] = None
+    usda_max_workers: Optional[int] = None
+    # B2S
+    enable_schema_diff: Optional[bool] = None
+    enable_dq_generation: Optional[bool] = None
+    tables: Optional[str] = None
+    # S2G
+    reprocess_all: Optional[bool] = None
+    # G2N
+    neo4j_layer: Optional[str] = None
+
 
 class BatchSourceConfig(BaseModel):
     """Configuration for a single source in a batch trigger."""

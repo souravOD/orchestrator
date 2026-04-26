@@ -29,6 +29,7 @@ from prefect import flow
 
 from . import db
 from .config import settings
+from .log_buffer import RunLogBuffer
 from .pipelines import (
     FlowCancelledError,
     PipelineTimeoutError,
@@ -47,11 +48,15 @@ from .pipelines import (
 logger = logging.getLogger(__name__)
 
 
-def _maybe_persist_logs(orch_run_id: str, **extra: Any) -> None:
+def _maybe_persist_logs(orch_run_id: str, *, console_lines=None, **extra: Any) -> None:
     """Fire-and-forget: persist run logs to storage. Never raises."""
     try:
         from .log_persister import persist_run_logs
-        persist_run_logs(orch_run_id, extra_metadata=extra if extra else None)
+        persist_run_logs(
+            orch_run_id,
+            extra_metadata=extra if extra else None,
+            console_lines=console_lines,
+        )
     except Exception as exc:
         logger.debug("Log persist skipped (non-fatal): %s", exc)
 
@@ -169,6 +174,9 @@ def full_ingestion_flow(
         )
         orch_run_id = orch_run["id"]
         logger.info("🔄 Orchestration run %s — full_ingestion started", orch_run_id)
+
+    # Register real-time log buffer for SSE streaming
+    RunLogBuffer.register(orch_run_id)
 
     results: Dict[str, Any] = {}
     layer_timings: Dict[str, float] = {}
@@ -330,8 +338,9 @@ def full_ingestion_flow(
         )
         results["_layer_timings"] = layer_timings
 
-        # Persist logs to storage (best-effort)
-        _maybe_persist_logs(orch_run_id, flow="full_ingestion")
+        # Persist logs to storage (best-effort) — drain buffer atomically
+        console_lines = RunLogBuffer.drain(orch_run_id)
+        _maybe_persist_logs(orch_run_id, console_lines=console_lines, flow="full_ingestion")
 
         return results
 
@@ -348,8 +357,9 @@ def full_ingestion_flow(
         )
         logger.error("❌ Full ingestion FAILED: %s", exc)
 
-        # Persist failure logs too
-        _maybe_persist_logs(orch_run_id, flow="full_ingestion", error=str(exc))
+        # Persist failure logs too — drain buffer atomically
+        console_lines = RunLogBuffer.drain(orch_run_id)
+        _maybe_persist_logs(orch_run_id, console_lines=console_lines, flow="full_ingestion", error=str(exc))
 
         raise
 
@@ -392,6 +402,9 @@ def bronze_to_gold_flow(
             vendor_id=vendor_id,
         )
         orch_run_id = orch_run["id"]
+
+    # Register real-time log buffer for SSE streaming
+    RunLogBuffer.register(orch_run_id)
     results: Dict[str, Any] = {}
 
     try:
@@ -421,6 +434,8 @@ def bronze_to_gold_flow(
             completed_at=db._utcnow(),
             duration_seconds=round(time.time() - start, 2),
         )
+        console_lines = RunLogBuffer.drain(orch_run_id)
+        _maybe_persist_logs(orch_run_id, console_lines=console_lines, flow="bronze_to_gold")
         return results
 
     except Exception as exc:
@@ -430,6 +445,8 @@ def bronze_to_gold_flow(
             completed_at=db._utcnow(),
             duration_seconds=round(time.time() - start, 2),
         )
+        console_lines = RunLogBuffer.drain(orch_run_id)
+        _maybe_persist_logs(orch_run_id, console_lines=console_lines, flow="bronze_to_gold", error=str(exc))
         raise
 
 
@@ -458,6 +475,8 @@ def single_layer_flow(
     trigger_type: str = "manual",
     triggered_by: Optional[str] = None,
     config: Optional[Dict[str, Any]] = None,
+    vendor_id: Optional[str] = None,
+    orch_run_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Run a single pipeline layer.  Useful for re-runs or targeted
@@ -471,15 +490,22 @@ def single_layer_flow(
             f"Valid layers: {list(LAYER_TASKS.keys())}"
         )
 
-    orch_run = db.create_orchestration_run(
-        flow_name=f"single_layer:{layer}",
-        trigger_type=trigger_type,
-        triggered_by=triggered_by,
-        layers=[layer],
-        config=cfg,
-        source_name=source_name,
-    )
-    orch_run_id = orch_run["id"]
+    # Reuse pre-created orchestration run from the API, or create one
+    if orch_run_id:
+        logger.info("🔄 Orchestration run %s — single_layer:%s started (pre-created)", orch_run_id, layer)
+    else:
+        orch_run = db.create_orchestration_run(
+            flow_name=f"single_layer:{layer}",
+            trigger_type=trigger_type,
+            triggered_by=triggered_by,
+            layers=[layer],
+            config=cfg,
+            source_name=source_name,
+        )
+        orch_run_id = orch_run["id"]
+
+    # Register real-time log buffer for SSE streaming
+    RunLogBuffer.register(orch_run_id)
     start = time.time()
 
     try:
@@ -509,6 +535,8 @@ def single_layer_flow(
             completed_at=db._utcnow(),
             duration_seconds=round(time.time() - start, 2),
         )
+        console_lines = RunLogBuffer.drain(orch_run_id)
+        _maybe_persist_logs(orch_run_id, console_lines=console_lines, flow="single_layer", layer=layer)
         return result
 
     except Exception:
@@ -518,6 +546,8 @@ def single_layer_flow(
             completed_at=db._utcnow(),
             duration_seconds=round(time.time() - start, 2),
         )
+        console_lines = RunLogBuffer.drain(orch_run_id)
+        _maybe_persist_logs(orch_run_id, console_lines=console_lines, flow="single_layer", layer=layer)
         raise
 
 
@@ -879,9 +909,10 @@ def multi_source_ingestion_flow(
         "source_results": batch_result.source_results,
     }
 
-    # Persist logs for all sub-runs (best-effort)
+    # Persist logs for all sub-runs (best-effort) — drain console output
     for run_id in (pre_created_run_ids or {}).values():
-        _maybe_persist_logs(run_id, flow="multi_source_ingestion")
+        console_lines = RunLogBuffer.drain(run_id)
+        _maybe_persist_logs(run_id, console_lines=console_lines, flow="multi_source_ingestion")
 
     return result
 
