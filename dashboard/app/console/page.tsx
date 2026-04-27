@@ -125,6 +125,30 @@ export default function ConsolePage() {
     // Source names from API
     const [sourceNames, setSourceNames] = useState<SourceNameItem[]>([]);
 
+    // ── Multi-Source Batch State ──
+    interface SourceConfig {
+        source_name: string;
+        batch_size: number;
+        incremental: boolean;
+        dry_run: boolean;
+        skip_translation: boolean;
+        llm_parallel_workers: number;
+        usda_limit: number | null;
+        usda_max_workers: number;
+        enable_schema_diff: boolean;
+        enable_dq_generation: boolean;
+        tables: string;
+        reprocess_all: boolean;
+        _expanded: boolean;
+    }
+    const [multiSources, setMultiSources] = useState<SourceConfig[]>([]);
+    const [concurrency, setConcurrency] = useState(3);
+    const isMultiSource = selectedFlow === "multi_source_ingestion";
+
+    // Batch execution state (multi-source produces multiple run IDs)
+    const [batchRuns, setBatchRuns] = useState<{ source_name: string; run_id: string }[]>([]);
+    const [activeBatchTab, setActiveBatchTab] = useState<string>("overview");
+
     // Environment toggle
     const [environment, setEnvironment] = useState<"production" | "testing">("production");
     const [testConfigured, setTestConfigured] = useState(false);
@@ -212,21 +236,110 @@ export default function ConsolePage() {
 
     const currentFlowDesc = flows.find((f) => f.name === selectedFlow)?.description || "";
 
-    // Determine which pipeline-specific options to show
-    const activeLayer = selectedFlow === "single_layer" ? layer : null;
-    const showP2BOptions = selectedFlow === "full_ingestion" || activeLayer === "prebronze_to_bronze";
-    const showUSDAOptions = selectedFlow === "full_ingestion" || activeLayer === "usda_nutrition_fetch";
-    const showB2SOptions = selectedFlow === "full_ingestion" || selectedFlow === "bronze_to_gold" || activeLayer === "bronze_to_silver";
-    const showS2GOptions = selectedFlow === "full_ingestion" || selectedFlow === "bronze_to_gold" || activeLayer === "silver_to_gold";
-    const showG2NOptions = activeLayer === "gold_to_neo4j";
-    const showGenericParams = selectedFlow !== "single_layer" || BATCH_SIZE_LAYERS.has(layer);
-    const hasAdvancedOptions = showP2BOptions || showUSDAOptions || showB2SOptions || showS2GOptions || showG2NOptions;
+    // ── Multi-Source Helpers ──────────────────────────
+    const addSource = useCallback((name: string) => {
+        setMultiSources((prev) => [
+            ...prev,
+            {
+                source_name: name,
+                batch_size: 100,
+                incremental: true,
+                dry_run: false,
+                skip_translation: false,
+                llm_parallel_workers: 3,
+                usda_limit: null,
+                usda_max_workers: 5,
+                enable_schema_diff: false,
+                enable_dq_generation: false,
+                tables: "",
+                reprocess_all: false,
+                _expanded: true,
+            },
+        ]);
+    }, []);
+
+    const removeSource = useCallback((idx: number) => {
+        setMultiSources((prev) => prev.filter((_, i) => i !== idx));
+    }, []);
+
+    const updateSourceConfig = useCallback(
+        (idx: number, patch: Partial<SourceConfig>) => {
+            setMultiSources((prev) =>
+                prev.map((s, i) => (i === idx ? { ...s, ...patch } : s))
+            );
+        },
+        []
+    );
 
     const handleExecute = useCallback(async () => {
         setError(null);
         setExecuting(true);
         setHistoricalMode(false);
 
+        // ── Multi-Source Batch Trigger ──
+        if (isMultiSource && multiSources.length > 0) {
+            const cmd = `orchestrator batch --flow multi_source_ingestion --sources ${multiSources.map((s) => s.source_name).join(",")} --concurrency ${concurrency}`;
+            setActiveCommand(cmd);
+
+            try {
+                const payload = {
+                    flow_name: "full_ingestion",
+                    sources: multiSources.map((s) => ({
+                        source_name: s.source_name,
+                        batch_size: s.batch_size,
+                        incremental: s.incremental,
+                        dry_run: s.dry_run,
+                        skip_translation: s.skip_translation || undefined,
+                        llm_parallel_workers: s.llm_parallel_workers,
+                        usda_limit: s.usda_limit || undefined,
+                        usda_max_workers: s.usda_max_workers !== 5 ? s.usda_max_workers : undefined,
+                        enable_schema_diff: s.enable_schema_diff || undefined,
+                        enable_dq_generation: s.enable_dq_generation || undefined,
+                        tables: s.tables || undefined,
+                        reprocess_all: s.reprocess_all || undefined,
+                    })),
+                    batch_size: 100,
+                    incremental: true,
+                    dry_run: false,
+                    max_concurrency: concurrency,
+                    environment,
+                };
+
+                const result = await api.triggerBatch(payload);
+
+                if (result.sources && result.sources.length > 0) {
+                    setBatchRuns(result.sources.map((s) => ({
+                        source_name: s.source_name,
+                        run_id: s.run_id,
+                    })));
+                    // Set first source as active terminal
+                    setActiveRunId(result.sources[0].run_id);
+                    setActiveBatchTab(result.sources[0].source_name);
+
+                    const item: HistoryItem = {
+                        command: cmd,
+                        flow: "multi_source_ingestion",
+                        timestamp: new Date().toISOString(),
+                        run_id: result.batch_id,
+                        environment,
+                    };
+                    const newHistory = [item, ...history].slice(0, 10);
+                    setHistory(newHistory);
+                    try {
+                        localStorage.setItem("console-history", JSON.stringify(newHistory));
+                    } catch { /* ignore */ }
+                } else {
+                    setError("No sources returned from batch API");
+                    setExecuting(false);
+                }
+            } catch (err) {
+                setError(err instanceof Error ? err.message : String(err));
+                setExecuting(false);
+            }
+            return;
+        }
+
+        // ── Single-Source Trigger (existing logic) ──
         const cmd = buildCommand(selectedFlow, {
             sourceName, batchSize, incremental, dryRun, workers, layer,
             skipTranslation, usdaLimit, usdaMaxWorkers, enableSchemaDiff,
@@ -271,6 +384,7 @@ export default function ConsolePage() {
 
             if (result.run_id) {
                 setActiveRunId(result.run_id);
+                setBatchRuns([]);
 
                 // Save to history with run_id
                 const item: HistoryItem = {
@@ -295,7 +409,8 @@ export default function ConsolePage() {
         }
     }, [selectedFlow, sourceName, batchSize, incremental, dryRun, workers, layer,
         history, environment, skipTranslation, usdaLimit, usdaMaxWorkers,
-        enableSchemaDiff, enableDqGeneration, tables, reprocessAll, neo4jLayer]);
+        enableSchemaDiff, enableDqGeneration, tables, reprocessAll, neo4jLayer,
+        isMultiSource, multiSources, concurrency]);
 
     const handleComplete = useCallback((status: string) => {
         setExecuting(false);
@@ -327,6 +442,16 @@ export default function ConsolePage() {
     }, []);
 
     // ── Render helpers for toggle/input ──────────────────
+
+    // Determine which pipeline-specific options to show (single-source mode)
+    const activeLayer = selectedFlow === "single_layer" ? layer : null;
+    const showP2BOptions = selectedFlow === "full_ingestion" || activeLayer === "prebronze_to_bronze";
+    const showUSDAOptions = selectedFlow === "full_ingestion" || activeLayer === "usda_nutrition_fetch";
+    const showB2SOptions = selectedFlow === "full_ingestion" || selectedFlow === "bronze_to_gold" || activeLayer === "bronze_to_silver";
+    const showS2GOptions = selectedFlow === "full_ingestion" || selectedFlow === "bronze_to_gold" || activeLayer === "silver_to_gold";
+    const showG2NOptions = activeLayer === "gold_to_neo4j";
+    const showGenericParams = selectedFlow !== "single_layer" || BATCH_SIZE_LAYERS.has(layer);
+    const hasAdvancedOptions = showP2BOptions || showUSDAOptions || showB2SOptions || showS2GOptions || showG2NOptions;
 
     const renderToggle = (label: string, value: boolean, onChange: (v: boolean) => void, id: string) => (
         <div className="form-toggle-group">
@@ -479,7 +604,8 @@ export default function ConsolePage() {
                             )}
                         </div>
 
-                        {SOURCE_FLOWS.has(selectedFlow) && (
+                        {/* Single-source selector (non-multi flows) */}
+                        {SOURCE_FLOWS.has(selectedFlow) && !isMultiSource && (
                             <div className="form-group" style={{ marginTop: 12 }}>
                                 <label className="form-label">Source Name</label>
                                 <select
@@ -498,6 +624,155 @@ export default function ConsolePage() {
                                             </option>
                                         ))}
                                 </select>
+                            </div>
+                        )}
+
+                        {/* ── Multi-Source Panel ── */}
+                        {isMultiSource && (
+                            <div style={{ marginTop: 12 }}>
+                                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                                    <label className="form-label" style={{ margin: 0 }}>
+                                        Sources ({multiSources.length})
+                                    </label>
+                                    <select
+                                        id="add-source-select"
+                                        className="form-select"
+                                        style={{ width: "auto", fontSize: 11, padding: "4px 8px" }}
+                                        value=""
+                                        onChange={(e) => {
+                                            if (e.target.value) addSource(e.target.value);
+                                        }}
+                                        disabled={executing}
+                                    >
+                                        <option value="">+ Add Source</option>
+                                        {sourceNames
+                                            .filter((s) => s.status !== "archived" && !multiSources.some((ms) => ms.source_name === s.source_name))
+                                            .map((s) => (
+                                                <option key={s.source_name} value={s.source_name}>
+                                                    {s.source_name} ({s.category})
+                                                </option>
+                                            ))}
+                                    </select>
+                                </div>
+
+                                {multiSources.length === 0 && (
+                                    <div style={{
+                                        padding: "16px 12px",
+                                        textAlign: "center",
+                                        color: "var(--text-muted)",
+                                        fontSize: 12,
+                                        border: "1px dashed var(--border)",
+                                        borderRadius: 8,
+                                    }}>
+                                        Add sources above to configure the batch
+                                    </div>
+                                )}
+
+                                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                                    {multiSources.map((src, idx) => (
+                                        <div key={src.source_name} style={{
+                                            border: "1px solid var(--border)",
+                                            borderRadius: 8,
+                                            background: "rgba(255,255,255,0.02)",
+                                            overflow: "hidden",
+                                        }}>
+                                            {/* Source Card Header */}
+                                            <div style={{
+                                                display: "flex",
+                                                alignItems: "center",
+                                                justifyContent: "space-between",
+                                                padding: "8px 10px",
+                                                cursor: "pointer",
+                                                background: src._expanded ? "rgba(59,130,246,0.06)" : "transparent",
+                                            }}
+                                                onClick={() => updateSourceConfig(idx, { _expanded: !src._expanded })}
+                                            >
+                                                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                                    <span style={{ fontSize: 10, color: "var(--text-muted)" }}>{idx + 1}.</span>
+                                                    <span style={{ fontWeight: 600, fontSize: 12 }}>{src.source_name}</span>
+                                                    <span style={{ fontSize: 10, color: "var(--text-muted)" }}>
+                                                        B:{src.batch_size} W:{src.llm_parallel_workers}
+                                                        {src.incremental ? " Inc" : " Full"}
+                                                        {src.dry_run ? " 🧪" : ""}
+                                                    </span>
+                                                </div>
+                                                <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                                                    <span style={{ fontSize: 10 }}>{src._expanded ? "▾" : "▸"}</span>
+                                                    <button
+                                                        onClick={(e) => { e.stopPropagation(); removeSource(idx); }}
+                                                        disabled={executing}
+                                                        style={{
+                                                            background: "none", border: "none", cursor: "pointer",
+                                                            color: "var(--accent-red, #ef4444)", fontSize: 12, padding: "0 4px",
+                                                        }}
+                                                        title="Remove source"
+                                                    >✕</button>
+                                                </div>
+                                            </div>
+
+                                            {/* Source Card Body (expanded) */}
+                                            {src._expanded && (
+                                                <div style={{ padding: "8px 10px", borderTop: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: 8 }}>
+                                                    {/* Core params */}
+                                                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                                                        <div className="form-group" style={{ margin: 0 }}>
+                                                            <label className="form-label" style={{ fontSize: 10 }}>Batch Size</label>
+                                                            <input type="number" className="form-input" style={{ fontSize: 11 }} min={1} max={10000}
+                                                                value={src.batch_size} onChange={(e) => updateSourceConfig(idx, { batch_size: Number(e.target.value) })} disabled={executing} />
+                                                        </div>
+                                                        <div className="form-group" style={{ margin: 0 }}>
+                                                            <label className="form-label" style={{ fontSize: 10 }}>Workers: {src.llm_parallel_workers}</label>
+                                                            <input type="range" className="form-range" min={1} max={5}
+                                                                value={src.llm_parallel_workers} onChange={(e) => updateSourceConfig(idx, { llm_parallel_workers: Number(e.target.value) })} disabled={executing} />
+                                                        </div>
+                                                    </div>
+                                                    {/* Toggles */}
+                                                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
+                                                        {renderToggle("Incremental", src.incremental, (v) => updateSourceConfig(idx, { incremental: v }), `ms-inc-${idx}`)}
+                                                        {renderToggle("Dry Run", src.dry_run, (v) => updateSourceConfig(idx, { dry_run: v }), `ms-dry-${idx}`)}
+                                                    </div>
+                                                    {/* Pipeline-specific */}
+                                                    <div style={{ fontSize: 10, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase" as const, letterSpacing: "0.05em" }}>
+                                                        Pipeline Options
+                                                    </div>
+                                                    {renderToggle("Skip Translation", src.skip_translation, (v) => updateSourceConfig(idx, { skip_translation: v }), `ms-skip-t-${idx}`)}
+                                                    {renderToggle("Schema Diff", src.enable_schema_diff, (v) => updateSourceConfig(idx, { enable_schema_diff: v }), `ms-sd-${idx}`)}
+                                                    {renderToggle("DQ Generation", src.enable_dq_generation, (v) => updateSourceConfig(idx, { enable_dq_generation: v }), `ms-dq-${idx}`)}
+                                                    {renderToggle("Reprocess All", src.reprocess_all, (v) => updateSourceConfig(idx, { reprocess_all: v }), `ms-rp-${idx}`)}
+                                                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                                                        <div className="form-group" style={{ margin: 0 }}>
+                                                            <label className="form-label" style={{ fontSize: 10 }}>USDA Limit</label>
+                                                            <input type="number" className="form-input" style={{ fontSize: 11 }} min={0}
+                                                                value={src.usda_limit || 0} onChange={(e) => updateSourceConfig(idx, { usda_limit: Number(e.target.value) || null })} disabled={executing} />
+                                                        </div>
+                                                        <div className="form-group" style={{ margin: 0 }}>
+                                                            <label className="form-label" style={{ fontSize: 10 }}>USDA Workers</label>
+                                                            <input type="number" className="form-input" style={{ fontSize: 11 }} min={1} max={10}
+                                                                value={src.usda_max_workers} onChange={(e) => updateSourceConfig(idx, { usda_max_workers: Number(e.target.value) })} disabled={executing} />
+                                                        </div>
+                                                    </div>
+                                                    <div className="form-group" style={{ margin: 0 }}>
+                                                        <label className="form-label" style={{ fontSize: 10 }}>Tables Filter</label>
+                                                        <input type="text" className="form-input" style={{ fontSize: 11 }} placeholder="e.g. recipes,ingredients"
+                                                            value={src.tables} onChange={(e) => updateSourceConfig(idx, { tables: e.target.value })} disabled={executing} />
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+
+                                {/* Concurrency slider */}
+                                {multiSources.length > 1 && (
+                                    <div className="form-group" style={{ marginTop: 10 }}>
+                                        <label className="form-label" style={{ fontSize: 11 }}>
+                                            Max Concurrency: {concurrency}
+                                            <span style={{ fontSize: 10, color: "var(--text-muted)", marginLeft: 4 }}>(simultaneous sources)</span>
+                                        </label>
+                                        <input type="range" className="form-range" min={1} max={5}
+                                            value={concurrency} onChange={(e) => setConcurrency(Number(e.target.value))} disabled={executing} />
+                                    </div>
+                                )}
                             </div>
                         )}
 
@@ -521,7 +796,8 @@ export default function ConsolePage() {
                         )}
                     </div>
 
-                    {/* ── Generic Parameters ── */}
+                    {/* ── Generic Parameters (hidden in multi-source mode — each card has its own) ── */}
+                    {!isMultiSource && (
                     <div className="config-section">
                         <div className="config-section-title">Parameters</div>
 
@@ -578,9 +854,10 @@ export default function ConsolePage() {
                             </>
                         ) : null}
                     </div>
+                    )}
 
-                    {/* ── Pipeline-Specific Options ── */}
-                    {hasAdvancedOptions && (
+                    {/* ── Pipeline-Specific Options (hidden in multi-source mode) ── */}
+                    {!isMultiSource && hasAdvancedOptions && (
                         <div className="config-section">
                             <button
                                 onClick={() => setShowAdvanced(!showAdvanced)}
@@ -714,13 +991,19 @@ export default function ConsolePage() {
                         id="execute-btn"
                         className={`btn-execute ${executing ? "running" : ""}`}
                         onClick={handleExecute}
-                        disabled={executing || loading}
+                        disabled={executing || loading || (isMultiSource && multiSources.length === 0)}
                         style={environment === "testing" && !executing ? {
                             background: "linear-gradient(135deg, rgb(245, 158, 11), rgb(217, 119, 6))",
                         } : undefined}
                     >
                         {executing ? (
                             <>⏳ Running...</>
+                        ) : isMultiSource ? (
+                            environment === "testing" ? (
+                                <>🧪 Execute Batch ({multiSources.length} sources)</>
+                            ) : (
+                                <>▶ Execute Batch ({multiSources.length} sources)</>
+                            )
                         ) : environment === "testing" ? (
                             <>🧪 Execute (Test)</>
                         ) : (
@@ -766,14 +1049,58 @@ export default function ConsolePage() {
                     )}
                 </div>
 
-                {/* Terminal */}
-                <Terminal
-                    runId={activeRunId}
-                    command={activeCommand}
-                    environment={environment}
-                    onComplete={handleComplete}
-                    historicalMode={historicalMode}
-                />
+                {/* Terminal — with batch source tabs for multi-source mode */}
+                <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0, minHeight: 0, overflow: "hidden" }}>
+                    {batchRuns.length > 1 && (
+                        <div style={{
+                            display: "flex",
+                            gap: 2,
+                            padding: "4px 8px",
+                            background: "rgba(0, 0, 0, 0.3)",
+                            borderRadius: "8px 8px 0 0",
+                            borderBottom: "1px solid var(--border)",
+                            overflowX: "auto",
+                        }}>
+                            {batchRuns.map((br) => (
+                                <button
+                                    key={br.source_name}
+                                    onClick={() => {
+                                        setActiveBatchTab(br.source_name);
+                                        setActiveRunId(br.run_id);
+                                    }}
+                                    style={{
+                                        padding: "4px 10px",
+                                        fontSize: 11,
+                                        fontWeight: 600,
+                                        border: "none",
+                                        borderRadius: 6,
+                                        cursor: "pointer",
+                                        background: activeBatchTab === br.source_name
+                                            ? "rgba(59, 130, 246, 0.15)"
+                                            : "transparent",
+                                        color: activeBatchTab === br.source_name
+                                            ? "var(--accent-blue, #3b82f6)"
+                                            : "var(--text-muted)",
+                                        borderBottom: activeBatchTab === br.source_name
+                                            ? "2px solid var(--accent-blue, #3b82f6)"
+                                            : "2px solid transparent",
+                                        transition: "all 0.15s ease",
+                                        whiteSpace: "nowrap",
+                                    }}
+                                >
+                                    {br.source_name}
+                                </button>
+                            ))}
+                        </div>
+                    )}
+                    <Terminal
+                        runId={activeRunId}
+                        command={activeCommand}
+                        environment={environment}
+                        onComplete={handleComplete}
+                        historicalMode={historicalMode}
+                    />
+                </div>
             </div>
         </div>
     );

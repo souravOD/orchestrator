@@ -239,6 +239,18 @@ export const api = {
             { method: "POST", body: JSON.stringify(payload) }
         ),
 
+    triggerBatch: (payload: Record<string, unknown>) =>
+        fetchApi<{
+            status: string;
+            batch_id: string;
+            sources: { source_name: string; run_id: string; status: string }[];
+            concurrency_limit: number;
+            queue_depth: number;
+        }>(
+            "/api/trigger-batch",
+            { method: "POST", body: JSON.stringify(payload) }
+        ),
+
     listSourceNames: (environment?: string) =>
         fetchApi<{ sources: SourceNameItem[] }>(
             `/api/source-names${environment ? `?environment=${encodeURIComponent(environment)}` : ""}`

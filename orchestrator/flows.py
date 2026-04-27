@@ -51,6 +51,9 @@ logger = logging.getLogger(__name__)
 def _maybe_persist_logs(orch_run_id: str, *, console_lines=None, **extra: Any) -> None:
     """Fire-and-forget: persist run logs to storage. Never raises."""
     try:
+        n_lines = len(console_lines) if console_lines else 0
+        logger.info("📦 Persisting logs for %s (%d console lines, env=%s)",
+                    orch_run_id, n_lines, db.get_env())
         from .log_persister import persist_run_logs
         persist_run_logs(
             orch_run_id,
@@ -58,7 +61,7 @@ def _maybe_persist_logs(orch_run_id: str, *, console_lines=None, **extra: Any) -
             console_lines=console_lines,
         )
     except Exception as exc:
-        logger.debug("Log persist skipped (non-fatal): %s", exc)
+        logger.warning("⚠️ Log persist failed (non-fatal): %s", exc)
 
 
 class ConcurrentRunError(RuntimeError):

@@ -311,10 +311,17 @@ class ParallelSourceRunner:
         if src_config.get("vendor_id"):
             kwargs["vendor_id"] = src_config["vendor_id"]
 
+        # Capture current environment before dispatching to executor thread
+        from . import db
+        current_env = db.get_env()
+
         # Run in thread with per-source scoped logging
         loop = asyncio.get_event_loop()
 
         def _execute():
+            # Propagate DB environment to executor thread (ContextVar
+            # doesn't auto-propagate to ThreadPoolExecutor threads)
+            db.set_env(current_env)
             with SourceScopedLogger(job.job_id, job.source_name):
                 return flow_fn(**kwargs)
 

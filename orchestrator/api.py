@@ -378,21 +378,68 @@ async def trigger_batch(request: BatchTriggerRequest):
         "dry_run": request.dry_run,
     }
 
+    # ── Set environment BEFORE creating runs so they land in correct DB ──
+    environment = request.environment
+    db.set_env(environment or "production")
+
     try:
         for src in request.sources:
+            # Build per-source config by merging source overrides onto batch defaults
+            src_config = dict(config)
+            if src.batch_size is not None:
+                src_config["batch_size"] = src.batch_size
+            if src.incremental is not None:
+                src_config["incremental"] = src.incremental
+            if src.dry_run is not None:
+                src_config["dry_run"] = src.dry_run
+            if src.skip_translation is not None:
+                src_config["skip_translation"] = src.skip_translation
+            if src.llm_parallel_workers is not None:
+                src_config["llm_parallel_workers"] = src.llm_parallel_workers
+            if src.usda_limit is not None:
+                src_config["usda_limit"] = src.usda_limit
+            if src.usda_max_workers is not None:
+                src_config["usda_max_workers"] = src.usda_max_workers
+            if src.enable_schema_diff is not None:
+                src_config["enable_schema_diff"] = src.enable_schema_diff
+            if src.enable_dq_generation is not None:
+                src_config["enable_dq_generation"] = src.enable_dq_generation
+            if src.tables:
+                src_config["tables"] = src.tables
+            if src.reprocess_all is not None:
+                src_config["reprocess_all"] = src.reprocess_all
+
             orch_run = db.create_orchestration_run(
                 flow_name=request.flow_name,
                 trigger_type="api",
                 triggered_by="api:/api/trigger-batch",
                 layers=["prebronze_to_bronze", "usda_nutrition_fetch", "bronze_to_silver",
                         "silver_to_gold"],
-                config=config,
+                config=src_config,
                 source_name=src.source_name,
                 vendor_id=src.vendor_id,
             )
             run_id = orch_run["id"]
             pre_created_run_ids[src.source_name] = run_id
-            source_configs.append(src.model_dump())
+
+            # Build the source config for the parallel runner
+            src_dump = src.model_dump()
+
+            # Resolve storage path from data_sources table (same as single trigger)
+            ds = db.get_data_source_by_name(src.source_name)
+            if ds and ds.get("storage_bucket") and ds.get("storage_path"):
+                src_dump["storage_bucket"] = ds["storage_bucket"]
+                spath = ds["storage_path"]
+                # Files live under testing/ prefix in the bucket
+                if environment == "testing" and not spath.startswith("testing/"):
+                    spath = f"testing/{spath}"
+                src_dump["storage_path"] = spath
+            else:
+                logger.warning(
+                    "No storage_path for source %s — flow may fail", src.source_name,
+                )
+
+            source_configs.append(src_dump)
             source_results.append({
                 "source_name": src.source_name,
                 "run_id": str(run_id),
@@ -404,22 +451,49 @@ async def trigger_batch(request: BatchTriggerRequest):
         batch_id = str(uuid.uuid4())[:12]
 
         # Dispatch to background — API returns immediately
-        loop = asyncio.get_event_loop()
-        loop.run_in_executor(
-            None,
-            lambda: multi_source_ingestion_flow(
-                sources=source_configs,
-                trigger_type="api",
-                triggered_by="api:/api/trigger-batch",
-                config=config,
-                pre_created_run_ids=pre_created_run_ids,
-            ),
+        # Use a dedicated thread (not the default executor which SSE streams
+        # may exhaust) so the batch flow starts immediately.
+        import threading
+
+        def _run_batch():
+            db.set_env(environment or "production")
+            try:
+                multi_source_ingestion_flow(
+                    sources=source_configs,
+                    trigger_type="api",
+                    triggered_by="api:/api/trigger-batch",
+                    config=config,
+                    pre_created_run_ids=pre_created_run_ids,
+                )
+            except Exception as exc:
+                logger.error("Batch flow failed: %s", exc)
+                # Mark all pre-created runs as failed
+                for src_name, rid in pre_created_run_ids.items():
+                    try:
+                        db.update_orchestration_run(
+                            rid, status="failed",
+                            total_errors=1,
+                            completed_at=db._utcnow(),
+                            error_message=str(exc),
+                        )
+                    except Exception:
+                        pass
+
+        batch_thread = threading.Thread(
+            target=_run_batch, daemon=True,
+            name=f"batch-{batch_id}",
         )
+        batch_thread.start()
 
         logger.info(
-            "🚀 Batch %s dispatched: %d sources (concurrency=%d)",
+            "Batch %s dispatched: %d sources (concurrency=%d, env=%s)",
             batch_id, len(request.sources), settings.parallel_max_concurrency,
+            environment or "production",
         )
+
+        # Reset to production for subsequent API requests
+        if environment:
+            db.set_env("production")
 
         return {
             "status": "accepted",
@@ -430,6 +504,8 @@ async def trigger_batch(request: BatchTriggerRequest):
         }
 
     except Exception as exc:
+        if environment:
+            db.set_env("production")
         logger.error("Batch trigger failed: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc))
 

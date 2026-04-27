@@ -256,21 +256,45 @@ class TriggerRequest(BaseModel):
 
 
 class BatchSourceConfig(BaseModel):
-    """Configuration for a single source in a batch trigger."""
+    """Configuration for a single source in a batch trigger.
+
+    Each source can override the batch-level defaults (batch_size, incremental,
+    dry_run, etc.) with its own per-source config.  Fields that are None fall
+    back to the batch-level value in BatchTriggerRequest.
+    """
     source_name: str = Field(..., min_length=1)
     input_path: Optional[str] = None
     storage_bucket: Optional[str] = None
     storage_path: Optional[str] = None
     vendor_id: Optional[str] = None
 
+    # Per-source overrides (None = use batch-level default)
+    batch_size: Optional[int] = None
+    incremental: Optional[bool] = None
+    dry_run: Optional[bool] = None
+    skip_translation: Optional[bool] = None
+    llm_parallel_workers: Optional[int] = None
+    usda_limit: Optional[int] = None
+    usda_max_workers: Optional[int] = None
+    enable_schema_diff: Optional[bool] = None
+    enable_dq_generation: Optional[bool] = None
+    tables: Optional[str] = None
+    reprocess_all: Optional[bool] = None
+
 
 class BatchTriggerRequest(BaseModel):
-    """Request body for triggering parallel ingestion of multiple sources."""
+    """Request body for triggering parallel ingestion of multiple sources.
+
+    Batch-level fields serve as defaults; each source in ``sources`` can
+    override them independently.
+    """
     flow_name: str = "full_ingestion"
     sources: List[BatchSourceConfig] = Field(..., min_length=1, max_length=20)
     batch_size: int = 100
     incremental: bool = True
     dry_run: bool = False
+    max_concurrency: Optional[int] = None
+    environment: Optional[str] = None
 
 
 class BatchTriggerResponse(BaseModel):

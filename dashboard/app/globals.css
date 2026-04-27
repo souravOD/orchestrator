@@ -1088,6 +1088,8 @@ a:hover {
   flex-direction: column;
   overflow: hidden;
   position: relative;
+  height: 100%;
+  min-height: 0;
 }
 
 .terminal::before {
@@ -1113,6 +1115,7 @@ a:hover {
   border-bottom: 1px solid var(--border-primary);
   background: rgba(255, 255, 255, 0.02);
   z-index: 2;
+  flex-shrink: 0;
 }
 
 .terminal-title {
@@ -1139,6 +1142,29 @@ a:hover {
   line-height: 1.8;
   z-index: 2;
   position: relative;
+  min-height: 0;
+}
+
+/* Custom scrollbar for terminal */
+.terminal-body::-webkit-scrollbar {
+  width: 10px;
+}
+
+.terminal-body::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 5px;
+}
+
+.terminal-body::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+.terminal-body::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);
+  background-clip: padding-box;
 }
 
 .terminal-line {
@@ -1209,6 +1235,7 @@ a:hover {
   font-size: 12px;
   font-weight: 600;
   z-index: 2;
+  flex-shrink: 0;
 }
 
 .terminal-status.completed {
