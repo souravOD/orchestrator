@@ -36,8 +36,14 @@ class RunLogBuffer:
     _lock = threading.Lock()
 
     @classmethod
-    def register(cls, orch_run_id: str, max_lines: int = 100_000) -> None:
-        """Create a new buffer for a run.  Safe to call multiple times."""
+    def register(cls, orch_run_id: str, max_lines: int = 50_000) -> None:
+        """Create a new buffer for a run.  Safe to call multiple times.
+
+        The default cap of 50 000 lines (~10 MB per run at ~200 bytes/line)
+        keeps worst-case memory at ~40 MB for 4 concurrent runs — well within
+        a typical container budget.  Increase via the *max_lines* argument if
+        a specific pipeline is known to emit more output.
+        """
         with cls._lock:
             if orch_run_id not in cls._buffers:
                 cls._buffers[orch_run_id] = deque(maxlen=max_lines)

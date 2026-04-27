@@ -74,7 +74,10 @@ export default function Terminal({
     useEffect(() => {
         if (!runId) return;
         if (historicalMode) {
-            // In historical mode, skip SSE and load bucket logs
+            // In historical mode, clear any stale live-stream state before
+            // loading bucket logs so old terminal lines don't persist visually.
+            setStreaming(false);
+            setLines([]);
             setActiveTab("stored");
             loadBucketLogs(runId);
             return;
@@ -121,7 +124,7 @@ export default function Terminal({
             eventSource.close();
             setStreaming(false);
         };
-    }, [runId]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [runId, historicalMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // ── Bucket Log Functions ──────────────────────────
 
