@@ -447,8 +447,8 @@ def run_prebronze_to_bronze(
             cli_args += ["--output-dir", cfg["output_dir"]]
         if cfg.get("target_table"):
             cli_args += ["--target-table", cfg["target_table"]]
-        if cfg.get("skip_translation"):
-            cli_args.append("--skip-translation")
+        if cfg.get("skip_translation") is False:
+            cli_args.append("--enable-translation")
         if cfg.get("vendor_id"):
             cli_args.extend(["--vendor-id", str(cfg["vendor_id"])])
         if cfg.get("source_record_id_field"):

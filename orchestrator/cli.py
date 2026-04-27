@@ -128,8 +128,8 @@ def cmd_run(args):
         config["batch_size"] = args.batch_size
     if args.no_incremental:
         config["incremental"] = False
-    if args.skip_translation:
-        config["skip_translation"] = True
+    if args.enable_translation:
+        config["skip_translation"] = False
     if args.vendor_id:
         config["vendor_id"] = args.vendor_id
     if getattr(args, "source_record_id_field", None):
@@ -359,7 +359,10 @@ def main():
     run_parser.add_argument("--layer", help="Layer name (for single_layer or neo4j_batch_sync)")
     run_parser.add_argument("--batch-size", type=int, help="Batch size override")
     run_parser.add_argument("--no-incremental", action="store_true", help="Disable incremental processing")
-    run_parser.add_argument("--skip-translation", action="store_true", help="Skip translation step (use for English-only data)")
+    run_parser.add_argument("--skip-translation", action="store_true", default=True,
+                            help="Skip translation step (default: ON for English-only data)")
+    run_parser.add_argument("--enable-translation", action="store_true",
+                            help="Enable language detection and translation for non-English sources")
     run_parser.add_argument("--vendor-id", help="Vendor UUID to associate with this pipeline run")
     run_parser.add_argument("--source-record-id-field",
                             help="Force source_record_id to use a specific input column (overrides auto-detection)")

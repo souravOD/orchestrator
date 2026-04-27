@@ -233,7 +233,7 @@ class TriggerRequest(BaseModel):
 
     # ── Pipeline-specific options ──────────────────────
     # P2B
-    skip_translation: Optional[bool] = None
+    skip_translation: bool = True  # Default: skip translation (English-only optimization)
     source_record_id_field: Optional[str] = None
     target_table: Optional[str] = None
     # USDA
@@ -272,7 +272,7 @@ class BatchSourceConfig(BaseModel):
     batch_size: Optional[int] = None
     incremental: Optional[bool] = None
     dry_run: Optional[bool] = None
-    skip_translation: Optional[bool] = None
+    skip_translation: Optional[bool] = True  # Default: skip translation
     llm_parallel_workers: Optional[int] = None
     usda_limit: Optional[int] = None
     usda_max_workers: Optional[int] = None

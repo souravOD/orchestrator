@@ -90,7 +90,7 @@ function buildCommand(
     if (isGenericLayer && opts.dryRun) parts.push("--dry-run");
 
     // Pipeline-specific
-    if (opts.skipTranslation) parts.push("--skip-translation");
+    if (!opts.skipTranslation) parts.push("--enable-translation");
     if (opts.usdaLimit) parts.push(`--usda-limit ${opts.usdaLimit}`);
     if (opts.tables) parts.push(`--tables ${opts.tables}`);
     if (opts.reprocessAll) parts.push("--reprocess-all");
@@ -112,7 +112,7 @@ export default function ConsolePage() {
     const [layer, setLayer] = useState("prebronze_to_bronze");
 
     // Form state — pipeline-specific
-    const [skipTranslation, setSkipTranslation] = useState(false);
+    const [skipTranslation, setSkipTranslation] = useState(true);
     const [usdaLimit, setUsdaLimit] = useState<number | null>(null);
     const [usdaMaxWorkers, setUsdaMaxWorkers] = useState(5);
     const [enableSchemaDiff, setEnableSchemaDiff] = useState(false);
@@ -245,7 +245,7 @@ export default function ConsolePage() {
                 batch_size: 100,
                 incremental: true,
                 dry_run: false,
-                skip_translation: false,
+                skip_translation: true,
                 llm_parallel_workers: 3,
                 usda_limit: null,
                 usda_max_workers: 5,
@@ -372,7 +372,7 @@ export default function ConsolePage() {
             payload.llm_parallel_workers = workers;
 
             // Pipeline-specific opts
-            if (skipTranslation) payload.skip_translation = true;
+            if (!skipTranslation) payload.skip_translation = false;
             if (usdaLimit) payload.usda_limit = usdaLimit;
             if (usdaMaxWorkers !== 5) payload.usda_max_workers = usdaMaxWorkers;
             if (enableSchemaDiff) payload.enable_schema_diff = true;
@@ -735,7 +735,7 @@ export default function ConsolePage() {
                                                     <div style={{ fontSize: 10, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase" as const, letterSpacing: "0.05em" }}>
                                                         Pipeline Options
                                                     </div>
-                                                    {renderToggle("Skip Translation", src.skip_translation, (v) => updateSourceConfig(idx, { skip_translation: v }), `ms-skip-t-${idx}`)}
+                                                    {renderToggle("Enable Translation", !src.skip_translation, (v) => updateSourceConfig(idx, { skip_translation: !v }), `ms-skip-t-${idx}`)}
                                                     {renderToggle("Schema Diff", src.enable_schema_diff, (v) => updateSourceConfig(idx, { enable_schema_diff: v }), `ms-sd-${idx}`)}
                                                     {renderToggle("DQ Generation", src.enable_dq_generation, (v) => updateSourceConfig(idx, { enable_dq_generation: v }), `ms-dq-${idx}`)}
                                                     {renderToggle("Reprocess All", src.reprocess_all, (v) => updateSourceConfig(idx, { reprocess_all: v }), `ms-rp-${idx}`)}
@@ -891,7 +891,7 @@ export default function ConsolePage() {
                                     {showP2BOptions && (
                                         <div style={{ padding: "8px 10px", background: "rgba(255,255,255,0.02)", borderRadius: 6, border: "1px solid var(--border)" }}>
                                             <div style={{ fontSize: 10, fontWeight: 600, color: "var(--text-muted)", marginBottom: 6, textTransform: "uppercase" as const, letterSpacing: "0.05em" }}>P2B — PreBronze → Bronze</div>
-                                            {renderToggle("Skip Translation", skipTranslation, setSkipTranslation, "toggle-skip-translation")}
+                                            {renderToggle("Enable Translation", !skipTranslation, (v) => setSkipTranslation(!v), "toggle-skip-translation")}
                                         </div>
                                     )}
 
